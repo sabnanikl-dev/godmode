@@ -73,7 +73,7 @@ GodMode opens on a selected project root (resolved and validated in the Electron
 - `missing` — no required files present.
 - `unreadable` — the path is not a readable directory (or none selected).
 
-Required: `AGENTS.md` plus `README.md` or `docs/spec.md`. Optional (reported but non-gating): `.agentic/godmode.yaml`, `docs/review/`, `docs/friction/`. Detection is path-relative to the selected root, not hardcoded to GodMode's own layout. PTY sessions launch with the selected root as their working directory.
+Required: `AGENTS.md` plus `README.md` or `docs/spec.md`. Optional (reported but non-gating): `.agentic/godmode.yaml`, `docs/review/`, `docs/architecture/`, `docs/conventions/`, `docs/friction/`. Detection is path-relative to the selected root, not hardcoded to GodMode's own layout. PTY sessions launch with the selected root as their working directory.
 
 ## V1 UX Shape
 

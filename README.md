@@ -38,5 +38,7 @@ The first scaffold includes a static tmux-style dashboard and PTY-backed termina
 
 - Product spec: `docs/godmode-v1-product-spec.md`
 - Living project spec: `docs/spec.md`
+- Architecture docs: `docs/architecture/`
+- Conventions: `docs/conventions/`
 - Agent harness: `AGENTS.md`
 - Project config: `.agentic/godmode.yaml`
