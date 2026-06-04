@@ -8,7 +8,7 @@ const panes = [
     agent: 'Hermes',
     commandHint: 'hermes',
     phase: 'orchestrating',
-    accent: 'green',
+    accent: 'blue',
   },
   {
     id: 'builder',
@@ -41,7 +41,7 @@ const chatEvents = [
     time: '19:42',
     from: 'karan',
     to: '@head',
-    body: 'Draft a UI issue after we see a QuadWork-inspired GodMode surface.',
+    body: 'Draft a UI issue after we see the Hermes cockpit direction for GodMode.',
   },
   {
     time: '19:44',
@@ -78,8 +78,8 @@ export function App() {
         <button className="rail-button" aria-label="Dashboard">
           D
         </button>
-        <button className="rail-button active" aria-label="Quad pane">
-          Q
+        <button className="rail-button active" aria-label="Agent workspace">
+          A
         </button>
         <button className="rail-button" aria-label="Pull requests">
           PR
@@ -93,7 +93,7 @@ export function App() {
         <header className="top-bar">
           <div className="brand-lockup">
             <strong>GodMode</strong>
-            <span>local multi-agent harness</span>
+            <span>Hermes command cockpit</span>
           </div>
           <div className="top-metrics" aria-label="Run telemetry">
             <span>Today <strong>0.8h</strong></span>
@@ -109,7 +109,7 @@ export function App() {
                 <span className="section-kicker">Harness Chat</span>
                 <strong>Team Control</strong>
               </div>
-              <span className="header-chip">live draft</span>
+              <span className="header-chip">operator draft</span>
             </header>
             <div className="chat-log" aria-label="Team chat transcript">
               {chatEvents.map((event) => (
@@ -176,7 +176,7 @@ export function App() {
                   <span className="section-kicker">Operator Features</span>
                   <strong>Review / Fix Trigger</strong>
                 </div>
-                <span className="header-chip success">Review auto-start</span>
+                <span className="header-chip success">mock auto-start</span>
               </header>
               <div className="script-box">
                 {schedulerLines.map((line) => (
@@ -198,7 +198,7 @@ export function App() {
                   <span className="section-kicker">Agent Models</span>
                   <button>Configure</button>
                 </header>
-                <p>head: hermes · builder: claude-code · reviewer_a: codex · reviewer_b: codex</p>
+                <p>mock bindings · head: hermes · builder: claude-code · reviewer_a: codex · reviewer_b: codex</p>
               </div>
               <div className="stack-section">
                 <header>

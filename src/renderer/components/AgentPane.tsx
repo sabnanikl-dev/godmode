@@ -28,10 +28,10 @@ export function AgentPane({ id, role, agent, commandHint, phase, accent }: Agent
       fontSize: 11,
       lineHeight: 1.2,
       theme: {
-        background: '#050608',
+        background: '#050712',
         foreground: '#d7dde7',
-        cursor: '#27f288',
-        selectionBackground: '#263238',
+        cursor: '#6aa7ff',
+        selectionBackground: '#172554',
       },
     });
     const fit = new FitAddon();
@@ -39,7 +39,7 @@ export function AgentPane({ id, role, agent, commandHint, phase, accent }: Agent
     term.open(terminalHostRef.current);
     fit.fit();
     term.writeln(`GodMode ${role} · ${agent}`);
-    term.writeln(`$ ${commandHint} --project /Users/creator/projects/godmode`);
+    term.writeln(`$ ${commandHint} --project <selected-project>`);
     term.writeln(`phase=${phase} adapter=cli`);
     term.writeln('');
 

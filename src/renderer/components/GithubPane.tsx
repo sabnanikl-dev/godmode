@@ -1,16 +1,16 @@
-const issues = [
-  '#12 QuadWork-inspired dashboard shell',
+const demoIssues = [
+  '#12 Hermes cockpit dashboard shell',
   '#13 Harness detector in main process',
   '#14 GitHub PR read-only pane',
 ];
 
-const pullRequests = [
+const demoPullRequests = [
   '#22 feat/ui-operator-grid · draft',
   '#21 chore/scaffold-electron · merged',
   '#20 docs/add-review-lenses · merged',
 ];
 
-const batchRows = [
+const demoBatchRows = [
   { id: '#12', label: 'Dashboard shell', progress: 74, status: 'builder running' },
   { id: '#13', label: 'Harness detector', progress: 35, status: 'needs spec' },
   { id: '#14', label: 'PR state pane', progress: 52, status: 'reviewer A pending' },
@@ -24,15 +24,15 @@ export function GithubPane() {
           <span className="section-kicker">GitHub</span>
           <strong>Issues · Pull Requests · Batch</strong>
         </div>
-        <span className="header-chip">main protected</span>
+        <span className="header-chip">mock GitHub state</span>
       </header>
       <div className="github-columns">
         <section>
           <header className="sub-header">
-            <span>Issues (3)</span>
+            <span>Mock issues (3)</span>
           </header>
           <ul className="feed-list">
-            {issues.map((issue) => (
+            {demoIssues.map((issue) => (
               <li key={issue}>
                 <span className="status-dot" />
                 {issue}
@@ -42,10 +42,10 @@ export function GithubPane() {
         </section>
         <section>
           <header className="sub-header">
-            <span>Pull Requests (3)</span>
+            <span>Mock pull requests (3)</span>
           </header>
           <ul className="feed-list">
-            {pullRequests.map((pullRequest) => (
+            {demoPullRequests.map((pullRequest) => (
               <li key={pullRequest}>
                 <span className="status-dot cyan" />
                 {pullRequest}
@@ -56,11 +56,11 @@ export function GithubPane() {
       </div>
       <div className="batch-panel">
         <header className="sub-header">
-          <span>Current Batch: UI Draft (3 items)</span>
+          <span>Demo Batch: UI Draft (3 items)</span>
           <strong>Manual merge gate</strong>
         </header>
         <div className="batch-list">
-          {batchRows.map((row) => (
+          {demoBatchRows.map((row) => (
             <article className="batch-row" key={row.id}>
               <span>{row.id}</span>
               <strong>{row.label}</strong>
@@ -73,7 +73,7 @@ export function GithubPane() {
         </div>
       </div>
       <footer className="queue-footer">
-        <span>3/3 harness files read</span>
+        <span>mock harness state · 3/3 files read</span>
         <button>Edit queue</button>
       </footer>
     </section>
