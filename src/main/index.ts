@@ -38,6 +38,31 @@ function isTrustedDevServerUrl(value: string): boolean {
   }
 }
 
+let mainWindow: BrowserWindow | null = null;
+
+/**
+ * Apply a project selection and, if the root actually changed, tear down any
+ * PTY sessions still rooted in the previous project. Agent commands must run in
+ * the selected project directory (AGENTS.md safety rule), so a live terminal
+ * must never outlive the project it was spawned in. Panes are reset in the UI
+ * via a synthetic exit so the operator restarts them in the new root.
+ */
+function selectProjectAndResetSessions(input: string) {
+  const previousRoot = getSelectedProjectRoot();
+  const state = selectProject(input);
+  const nextRoot = getSelectedProjectRoot();
+
+  if (nextRoot !== previousRoot) {
+    for (const paneId of killAllPtySessions()) {
+      if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+        mainWindow.webContents.send('godmode:pty:exit', { paneId, exit: { exitCode: 0 } });
+      }
+    }
+  }
+
+  return state;
+}
+
 function createWindow(): void {
   const win = new BrowserWindow({
     width: 1440,
@@ -49,6 +74,11 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+
+  mainWindow = win;
+  win.on('closed', () => {
+    if (mainWindow === win) mainWindow = null;
   });
 
   if (process.env.VITE_DEV_SERVER_URL) {
@@ -69,7 +99,7 @@ app.whenReady().then(() => {
   ipcMain.handle('godmode:project:select', (_event, input: unknown) => {
     const payload = parseIpcPayload(projectSelectSchema, input);
     if (!payload) return undefined;
-    return selectProject(payload.path);
+    return selectProjectAndResetSessions(payload.path);
   });
 
   ipcMain.handle('godmode:project:browse', async () => {
@@ -79,7 +109,7 @@ app.whenReady().then(() => {
       defaultPath: getSelectedProjectRoot(),
     });
     if (result.canceled || result.filePaths.length === 0) return undefined;
-    return selectProject(result.filePaths[0]);
+    return selectProjectAndResetSessions(result.filePaths[0]);
   });
 
   ipcMain.handle('godmode:pty:start', (event, input: unknown) => {
