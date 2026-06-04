@@ -72,8 +72,8 @@ function unreadable(error: string): ProjectHarnessState {
 /**
  * Inspect a project root for GodMode harness files. The required set mirrors the
  * minimum harness contract in docs/godmode-v1-product-spec.md: AGENTS.md plus a
- * README.md or docs/spec.md. Optional files improve agent fidelity but never gate
- * validity.
+ * README.md or docs/spec.md. Optional documentation folders improve agent
+ * fidelity but never gate validity.
  */
 export function detectHarness(root: string): ProjectHarnessState {
   try {
@@ -113,6 +113,20 @@ export function detectHarness(root: string): ProjectHarnessState {
       kind: 'optional',
       present: isDir(root, 'docs/review'),
       candidates: ['docs/review/'],
+    },
+    {
+      id: 'architecture',
+      label: 'docs/architecture/',
+      kind: 'optional',
+      present: isDir(root, 'docs/architecture'),
+      candidates: ['docs/architecture/'],
+    },
+    {
+      id: 'conventions',
+      label: 'docs/conventions/',
+      kind: 'optional',
+      present: isDir(root, 'docs/conventions'),
+      candidates: ['docs/conventions/'],
     },
     {
       id: 'friction',

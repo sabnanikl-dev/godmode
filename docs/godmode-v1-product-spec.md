@@ -608,7 +608,7 @@ Example:
 commands:
   builder_start: |
     Work on issue {{issue_id}}.
-    Read AGENTS.md, docs/spec.md, and the issue.
+    Read AGENTS.md, docs/spec.md, relevant docs/architecture and docs/conventions files, and the issue.
     Follow the project harness.
     Create a branch, implement, verify, push, and open a PR.
 
@@ -646,8 +646,11 @@ Recommended harness:
 AGENTS.md
 docs/
   spec.md
+  architecture/
+    README.md
   build-plan.md
   conventions/
+    README.md
     branch-pr-policy.md
     testing.md
     code-style.md
@@ -687,7 +690,15 @@ docs/
 - known risks,
 - links to detailed docs.
 
-## 10.3 Reviewer docs
+## 10.3 Architecture and convention docs
+
+Architecture and convention folders are part of the recommended harness so agents can find standing design and workflow rules without relying on one-off prompts.
+
+- `docs/architecture/` should hold durable technical design, module boundaries, data flow, state-machine notes, and adapter decisions.
+- `docs/conventions/` should hold standing branch, PR, testing, code style, and issue-to-PR workflow rules.
+- Both folders should include a `README.md` that explains what belongs there and should be updated in the same PR as rules or architecture that affect future agents.
+
+## 10.4 Reviewer docs
 
 Reviewer docs should define standing lenses so Hermes does not need to over-prompt.
 
@@ -696,7 +707,7 @@ Example:
 - `docs/review/reviewer-a-correctness.md`
 - `docs/review/reviewer-b-architecture.md`
 
-## 10.4 GodMode project config
+## 10.5 GodMode project config
 
 `.agentic/godmode.yaml` can define:
 
@@ -709,6 +720,10 @@ project:
 harness:
   agents_file: AGENTS.md
   spec_file: docs/spec.md
+  architecture_dir: docs/architecture
+  conventions_dir: docs/conventions
+  review_dir: docs/review
+  friction_dir: docs/friction
 
 roles:
   head: hermes-head
