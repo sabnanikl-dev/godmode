@@ -514,56 +514,80 @@ GodMode should define role slots:
 
 Each role maps to an agent adapter.
 
+Roles bind to a generic `pane` and reference an agent by key; agents are
+defined once in a separate `agents` map (adapter, command, mode). This keeps
+roles vendor-neutral and lets multiple roles reuse one agent definition.
+
 Example Karan default config:
 
 ```yaml
 roles:
   head:
-    id: hermes-head
-    adapter: cli
+    agent: hermes
+    pane: head
     display_name: Hermes
-    command: hermes
-
   builder:
-    id: claude-builder
-    adapter: cli
+    agent: claude-code
+    pane: builder
     display_name: Claude Code
+  reviewers:
+    - id: reviewer-a
+      agent: codex
+      pane: reviewer_a
+      display_name: Codex A
+      role_doc: docs/review/reviewer-a-correctness.md
+    - id: reviewer-b
+      agent: codex
+      pane: reviewer_b
+      display_name: Codex B
+      role_doc: docs/review/reviewer-b-architecture.md
+
+agents:
+  hermes:
+    adapter: cli
+    command: hermes
+    mode: interactive
+  claude-code:
+    adapter: cli
     command: claude
-    mode: interactive_or_print
-
-  reviewer_a:
-    id: codex-correctness
+    mode: interactive
+  codex:
     adapter: cli
-    display_name: Codex A
     command: codex
-    focus: correctness_security_tests
-
-  reviewer_b:
-    id: codex-architecture
-    adapter: cli
-    display_name: Codex B
-    command: codex
-    focus: architecture_spec_harness
+    mode: oneshot
 ```
 
-Alternate config example:
+Alternate config example (different agents, same role slots):
 
 ```yaml
 roles:
   head:
-    adapter: cli
+    agent: openclaw
+    pane: head
     display_name: OpenClaw
-    command: openclaw
-
   builder:
-    adapter: cli
+    agent: codex
+    pane: builder
     display_name: Codex Builder
-    command: codex
+  reviewers:
+    - id: reviewer-a
+      agent: claude-code
+      pane: reviewer_a
+      display_name: Claude Reviewer
 
-  reviewer_a:
+agents:
+  openclaw:
     adapter: cli
-    display_name: Claude Reviewer
+    command: openclaw
+    mode: interactive
+  codex:
+    adapter: cli
+    command: codex
+    mode: interactive
+  claude-code:
+    adapter: cli
     command: claude
+    mode: oneshot
 ```
 
 ## 9.2 Agent adapter contract
@@ -714,30 +738,62 @@ Example:
 ```yaml
 project:
   name: GodMode
-  repo: sabnanikl-dev/godmode
   default_branch: main
 
 harness:
   agents_file: AGENTS.md
   spec_file: docs/spec.md
+  product_spec_file: docs/godmode-v1-product-spec.md
   architecture_dir: docs/architecture
   conventions_dir: docs/conventions
   review_dir: docs/review
   friction_dir: docs/friction
 
 roles:
-  head: hermes-head
-  builder: claude-builder
+  head:
+    agent: hermes
+    pane: head
+    display_name: Hermes
+  builder:
+    agent: claude-code
+    pane: builder
+    display_name: Claude Code
   reviewers:
-    - codex-correctness
-    - codex-architecture
+    - id: reviewer-a
+      agent: codex
+      pane: reviewer_a
+      display_name: Codex A
+      role_doc: docs/review/reviewer-a-correctness.md
+    - id: reviewer-b
+      agent: codex
+      pane: reviewer_b
+      display_name: Codex B
+      role_doc: docs/review/reviewer-b-architecture.md
 
 workflow:
   auto_start_reviewers_after_pr: true
   auto_send_blockers_to_builder: true
-  max_fix_cycles: 2
+  max_fix_cycles: 3
   auto_merge: false
+
+agents:
+  hermes:
+    adapter: cli
+    command: hermes
+    mode: interactive
+  claude-code:
+    adapter: cli
+    command: claude
+    mode: interactive
+  codex:
+    adapter: cli
+    command: codex
+    mode: oneshot
 ```
+
+This is the schema the main-process loader validates (see `docs/spec.md`);
+`roles` reference agent keys defined in the `agents` map, and unknown
+references are rejected as invalid config.
 
 ---
 
