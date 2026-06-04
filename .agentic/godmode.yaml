@@ -8,6 +8,10 @@ harness:
   agents_file: AGENTS.md
   spec_file: docs/spec.md
   product_spec_file: docs/godmode-v1-product-spec.md
+  architecture_dir: docs/architecture
+  conventions_dir: docs/conventions
+  review_dir: docs/review
+  friction_dir: docs/friction
 
 roles:
   head:

@@ -24,9 +24,11 @@ Agents must use repo-local source of truth before inventing behavior:
 1. `AGENTS.md` — process and authority rules.
 2. `docs/spec.md` — current product/technical specification.
 3. `docs/godmode-v1-product-spec.md` — full v1 product spec.
-4. `.agentic/godmode.yaml` — default local role/workflow config.
-5. GitHub Issues/PRs/comments — task and review state.
-6. `docs/friction/` — running lessons from things that broke.
+4. `docs/architecture/` — durable technical design and module boundaries.
+5. `docs/conventions/` — standing branch, PR, testing, and coding conventions.
+6. `.agentic/godmode.yaml` — default local role/workflow config and harness doc locations.
+7. GitHub Issues/PRs/comments — task and review state.
+8. `docs/friction/` — running lessons from things that broke.
 
 Do not encode durable project rules only in one-off prompts. If a rule should guide future agents, put it in the harness docs.
 
@@ -60,7 +62,7 @@ Prefer simple, boring implementation over clever abstractions.
 ### Issue-to-PR Loop
 
 1. Karan or the head role selects an issue/task.
-2. Builder starts a fresh session for the task, then reads this harness, `docs/spec.md`, the issue, and relevant docs/comments.
+2. Builder starts a fresh session for the task, then reads this harness, `docs/spec.md`, the issue, and relevant docs/comments, including `docs/architecture/` and `docs/conventions/` when the task touches design or standing workflow rules.
 3. Builder creates a branch, implements, verifies, pushes, and opens a PR.
 4. Once a PR is detected, Reviewer A and Reviewer B start fresh review sessions, read `AGENTS.md`, the PR, linked issues, comments, and relevant docs, then review.
 5. If blockers are found, the builder starts a fresh fix session, receives accepted blockers, fixes them, pushes, and comments on the PR.
