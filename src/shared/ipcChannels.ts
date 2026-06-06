@@ -21,3 +21,5 @@ export const GODMODE_IPC = {
 } as const;
 
 export type GodmodeIpcChannel = (typeof GODMODE_IPC)[keyof typeof GODMODE_IPC];
+
+export const GODMODE_IPC_CHANNELS: readonly GodmodeIpcChannel[] = Object.values(GODMODE_IPC);
