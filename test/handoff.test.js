@@ -92,6 +92,33 @@ test('a manual task is blocked from direct send (no issue number to bind)', () =
   assert.match(handoff.prompt, /operated project/i);
 });
 
+test('a manual task stays unsendable even when builder_start omits issue tokens', () => {
+  // Regression: canSend must be gated on source type, not just the absence of
+  // unbound template tokens. A custom builder_start with no {{issueNumber}}
+  // leaves missingVariables empty, but a manual task must never be directly
+  // sendable — it routes through needs_spec or gets attached to a GitHub issue.
+  const custom = { ...DEFAULT_CONFIG, commands: { builder_start: 'Build {{projectName}} now' } };
+  const manualRun = {
+    ...createRun({
+      sourceType: 'manual_task',
+      sourceId: 'task-y',
+      issueTitle: 'No-token template',
+      sourceDetail: { body: 'do the thing' },
+      now: NOW,
+      id: 'run-task-y',
+    }),
+    status: 'issue_selected',
+  };
+  const manual = composeBuilderHandoff(custom, manualRun, { projectName: 'godmode' });
+  assert.deepEqual(manual.missingVariables, [], 'the override leaves no unbound tokens');
+  assert.equal(manual.canSend, false, 'manual task must not be sendable despite empty missingVariables');
+  assert.match(manual.blockedReason, /needs_spec/);
+
+  // The same override on a real GitHub issue stays sendable.
+  const issue = composeBuilderHandoff(custom, githubRun(), { projectName: 'godmode' });
+  assert.equal(issue.canSend, true);
+});
+
 test('no bound run yields a clearly-labeled mock handoff that cannot be sent', () => {
   const handoff = composeBuilderHandoff(DEFAULT_CONFIG, null, { projectName: 'godmode' });
   assert.equal(handoff.isMock, true);

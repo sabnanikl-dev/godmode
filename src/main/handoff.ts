@@ -163,14 +163,21 @@ export function composeBuilderHandoff(
   const prompt = `${templatePrompt}\n\n${groundingBlock(run, projectName, docPointers)}`;
 
   const isMock = run === null;
-  const canSend = !isMock && missingVariables.length === 0;
+  // The source-type gate is authoritative, NOT just the absence of unbound
+  // template tokens: a project can override `commands.builder_start` with a
+  // template that omits `{{issueNumber}}` (e.g. "Build {{projectName}} now"),
+  // which would otherwise leave `missingVariables` empty and let a manual task
+  // become sendable. Only a bound GitHub issue is directly sendable; manual tasks
+  // must route through `needs_spec` or be attached to a GitHub issue first.
+  const isGithubIssue = run?.sourceType === 'github_issue';
+  const canSend = isGithubIssue && missingVariables.length === 0;
 
   let blockedReason: string | undefined;
   if (isMock) {
     blockedReason = 'No issue or task is bound. Select a GitHub issue or create a manual task to build a real handoff.';
-  } else if (run!.sourceType === 'manual_task') {
+  } else if (!isGithubIssue) {
     blockedReason =
-      'Manual tasks have no GitHub issue number to bind ({{issueNumber}} unresolved). Route to needs_spec or attach a GitHub issue before sending.';
+      'Manual tasks have no GitHub issue to bind. Route to needs_spec or attach a GitHub issue before sending.';
   } else if (missingVariables.length > 0) {
     blockedReason = `Unresolved template variables: ${missingVariables.join(', ')}.`;
   }
