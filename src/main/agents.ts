@@ -178,6 +178,57 @@ function renderCommand(
   };
 }
 
+/** The agent id bound to a pane/role in a config, or undefined if none. */
+function agentIdForRole(config: GodmodeConfig, role: AgentRole): string | undefined {
+  if (role === 'head') return config.roles.head.agent;
+  if (role === 'builder') return config.roles.builder.agent;
+  return config.roles.reviewers.find((reviewer) => reviewer.pane === role)?.agent;
+}
+
+/** What the PTY layer needs to launch a configured role session. */
+export type RoleLaunchSpec = {
+  paneId: AgentRole;
+  agentId: string;
+  adapter: AgentAdapter;
+  mode: AgentMode;
+  /** Configured agent command, e.g. "claude" or "node --version". */
+  command: string;
+};
+
+/**
+ * Resolve a pane/role to its launchable command, or a visible reason it cannot
+ * launch. Like the registry, this reads the loaded config and falls back to safe
+ * defaults when the file is invalid/missing, so a broken config never blocks the
+ * shipped default agents. Only the `cli` adapter is launch-wired in v1; other
+ * adapters resolve to a descriptive error rather than a silent no-op or crash.
+ */
+export function resolveRoleLaunch(
+  paneId: AgentRole,
+): { ok: true; spec: RoleLaunchSpec } | { ok: false; error: string } {
+  const loaded = loadConfig();
+  const config = loaded.status === 'loaded' ? loaded.config : DEFAULT_CONFIG;
+
+  const agentId = agentIdForRole(config, paneId);
+  if (!agentId) {
+    return { ok: false, error: `No agent is configured for the ${paneId} role.` };
+  }
+  const agent = config.agents[agentId];
+  if (!agent) {
+    return { ok: false, error: `Unknown agent "${agentId}" bound to the ${paneId} role.` };
+  }
+  if (agent.adapter !== 'cli') {
+    return {
+      ok: false,
+      error: `The ${paneId} agent "${agentId}" uses the ${agent.adapter} adapter, which is not launchable in this version. Only cli agents launch in v1.`,
+    };
+  }
+
+  return {
+    ok: true,
+    spec: { paneId, agentId, adapter: agent.adapter, mode: agent.mode, command: agent.command },
+  };
+}
+
 /** Resolve every configured role into an adapter/capability object. */
 export function buildRoleResolutions(config: GodmodeConfig): RoleResolution[] {
   const toResolution = (

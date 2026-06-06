@@ -521,6 +521,16 @@ p {
   gap: 7px;
 }
 
+/* Let the title truncate so the start/restart/stop controls always stay visible
+   and unclipped in shorter/narrower windows (issue #6 UI direction). */
+.agent-title {
+  min-width: 0;
+}
+
+.agent-actions {
+  flex: 0 0 auto;
+}
+
 .agent-title strong {
   color: #e8edf4;
   font-size: 0.7rem;
