@@ -7,7 +7,7 @@ import { getGithubState } from './github.js';
 import { killAllPtySessions, openPtySession, resizePtySession, stopPtySession, writeToPtySession } from './pty.js';
 import { getProjectState, getSelectedProjectRoot, selectProject } from './project.js';
 import { getConfigState } from './config.js';
-import { getRegistryState } from './agents.js';
+import { getRegistryState, resolveRoleLaunch } from './agents.js';
 import { GODMODE_IPC } from '../shared/ipcChannels.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -143,6 +143,13 @@ function handleStartPty(event: Electron.IpcMainInvokeEvent, input: unknown) {
   const payload = parseIpcPayload(ptyStartSchema, input);
   if (!payload) return undefined;
 
+  // Map the pane/role to its configured agent command. An unlaunchable role
+  // (no agent, non-cli adapter) returns a visible error instead of spawning.
+  const launch = resolveRoleLaunch(payload.paneId);
+  if (!launch.ok) {
+    return { ok: false, paneId: payload.paneId, error: launch.error };
+  }
+
   const stopOwnedSession = () => stopPtySession(payload.paneId);
   event.sender.once('destroyed', stopOwnedSession);
   event.sender.once('did-start-navigation', stopOwnedSession);
@@ -150,6 +157,7 @@ function handleStartPty(event: Electron.IpcMainInvokeEvent, input: unknown) {
   return openPtySession({
     paneId: payload.paneId,
     projectRoot: getSelectedProjectRoot(),
+    command: launch.spec.command,
     onData: (data) => event.sender.send(GODMODE_IPC.ptyData, { paneId: payload.paneId, data }),
     onExit: (exit) => event.sender.send(GODMODE_IPC.ptyExit, { paneId: payload.paneId, exit }),
   });

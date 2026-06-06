@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { PtyExit } from '../main/pty.js';
+import type { PtyExit, PtyStartResult } from '../main/pty.js';
 import type {
   AgentRegistryState,
   AppRepoState,
@@ -34,7 +34,7 @@ const api = {
     return () => ipcRenderer.off(GODMODE_IPC.projectChanged, listener);
   },
   startPty: (input: { paneId: string }) =>
-    ipcRenderer.invoke(GODMODE_IPC.ptyStart, input) as Promise<{ paneId: string; pid: number } | undefined>,
+    ipcRenderer.invoke(GODMODE_IPC.ptyStart, input) as Promise<PtyStartResult | undefined>,
   writePty: (input: { paneId: string; data: string }) => ipcRenderer.send(GODMODE_IPC.ptyWrite, input),
   resizePty: (input: { paneId: string; cols: number; rows: number }) => ipcRenderer.send(GODMODE_IPC.ptyResize, input),
   stopPty: (input: { paneId: string }) => ipcRenderer.send(GODMODE_IPC.ptyStop, input),

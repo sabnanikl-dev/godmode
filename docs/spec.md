@@ -103,6 +103,10 @@ On top of the same loaded config, the main process resolves a role-based **adapt
 
 The registry also renders **command templates** for the builder/reviewer lifecycle steps (`builder_start`, `reviewer_start`, `builder_fix`) with `{{variable}}` placeholders bound from issue/PR/role context. Built-in safe defaults lead with the harness reading rules; a project may override any kind via an optional `commands:` config block. Rendering a command never launches it: the renderer shows each command role-first and marked `preview · mock until launched`, with unbound variables left as visible placeholders and listed per card. Invalid/unreadable config yields safe defaults plus a visible error. See `docs/architecture/agent-adapter-registry.md`.
 
+## Role Session Launch
+
+Starting a pane launches the configured agent for that role, not a generic shell. On `godmode:pty:start`, the main process maps the pane/role to its bound agent command via `resolveRoleLaunch` (only `cli` adapters launch in v1; an unconfigured role or non-cli adapter returns a visible reason). The command runs in a `node-pty` session whose working directory is restricted to the selected operated-project root, with the same sanitized/minimal environment as before. The executable is resolved on the safe `PATH` (or against the project root for a path-bearing command) up front, so an invalid/missing command yields a visible error inside the pane rather than a crash. Each pane has start/restart/stop controls — restart reuses start, since launching replaces any live session for that pane. Sessions stop on UI stop, renderer teardown, and app quit. See `docs/architecture/role-session-launch.md`.
+
 ## V1 UX Shape
 
 V1 should feel like a terminal multiplexer with agent-specific panes:
