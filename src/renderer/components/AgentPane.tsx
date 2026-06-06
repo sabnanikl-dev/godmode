@@ -40,7 +40,7 @@ export function AgentPane({ id, role, agent, commandHint, phase, accent, roleDoc
     term.open(terminalHostRef.current);
     fit.fit();
     term.writeln(`GodMode ${role} · ${agent}`);
-    term.writeln(`$ ${commandHint} --project <selected-project>`);
+    term.writeln(`$ ${commandHint}`);
     term.writeln(`phase=${phase} adapter=cli`);
     if (roleDoc) term.writeln(`role-doc=${roleDoc}`);
     term.writeln('');
@@ -80,15 +80,23 @@ export function AgentPane({ id, role, agent, commandHint, phase, accent, roleDoc
     };
   }, [agent, commandHint, id, phase, role, roleDoc]);
 
-  async function startShell() {
+  async function start() {
     setStatus('running');
-    const session = await window.godmode?.startPty({ paneId: id });
-    runningRef.current = session !== undefined;
-    if (!runningRef.current) setStatus('idle');
-    fitRef.current?.fit();
+    // Starting replaces any live session for this pane in the main process, so
+    // this also serves as restart.
+    const result = await window.godmode?.startPty({ paneId: id });
+    if (result?.ok) {
+      runningRef.current = true;
+      fitRef.current?.fit();
+      return;
+    }
+    runningRef.current = false;
+    setStatus('idle');
+    const message = result && !result.ok ? result.error : 'Failed to start session.';
+    terminalRef.current?.writeln(`\r\n[launch error: ${message}]`);
   }
 
-  function stopShell() {
+  function stop() {
     window.godmode?.stopPty({ paneId: id });
     runningRef.current = false;
     setStatus('idle');
@@ -109,10 +117,13 @@ export function AgentPane({ id, role, agent, commandHint, phase, accent, roleDoc
         </div>
         <div className="agent-actions">
           <span>{phase}</span>
-          <button onClick={startShell} disabled={status === 'running'} aria-label={`Start ${role} shell`}>
-            {status === 'running' ? 'Run' : '▶'}
+          <button onClick={start} disabled={status === 'running'} aria-label={`Start ${role} session`}>
+            ▶
           </button>
-          <button onClick={stopShell} disabled={status === 'idle'} aria-label={`Stop ${role} shell`}>
+          <button onClick={start} disabled={status === 'idle'} aria-label={`Restart ${role} session`}>
+            ↻
+          </button>
+          <button onClick={stop} disabled={status === 'idle'} aria-label={`Stop ${role} session`}>
             ■
           </button>
         </div>
