@@ -142,10 +142,12 @@ function resolveTarget(run: RunSnapshot, action: RunAction): RunStatus | undefin
 /**
  * The actions valid from a run's current state. Renderers render exactly these
  * as operator controls. `resume` is surfaced only while paused (and only when a
- * resume target was recorded).
+ * resume target was recorded). `request_fix` is dropped once the cycle budget is
+ * exhausted, so the loop deterministically stops at `maxCycles`.
  */
 export function computeAvailableActions(run: RunSnapshot): RunAction[] {
-  const base = Object.keys(TRANSITION_TABLE[run.status]) as RunAction[];
+  let base = Object.keys(TRANSITION_TABLE[run.status]) as RunAction[];
+  if (run.cycle >= run.maxCycles) base = base.filter((action) => action !== 'request_fix');
   if (run.status === 'paused' && run.resumeStatus) return ['resume', ...base];
   return base;
 }
@@ -181,6 +183,19 @@ export function applyAction(
       ok: false,
       code: 'invalid_transition',
       error: `Action "${action}" is not allowed from status "${run.status}".`,
+      run,
+    };
+  }
+
+  // Numeric budget guard layered on top of the structural table: a fix cycle is
+  // legal only while the cycle budget has room. At the cap, `request_fix` is also
+  // dropped from `availableActions`, so the loop stops deterministically and the
+  // operator/orchestrator routes to `max_cycles_exceeded` or `merge_ready`.
+  if (action === 'request_fix' && run.cycle >= run.maxCycles) {
+    return {
+      ok: false,
+      code: 'invalid_transition',
+      error: `Fix-cycle budget reached (cycle ${run.cycle} of ${run.maxCycles}); cannot request another fix. Route to max_cycles_exceeded or mark merge-ready.`,
       run,
     };
   }
@@ -268,6 +283,13 @@ export function createRun(input: CreateRunInput = {}): RunSnapshot {
 
 let currentRun: RunSnapshot | null = null;
 
+/**
+ * Finished lifecycle states. A run in one of these is "done" — its log is final,
+ * so it can be replaced by selecting a new issue. Any other (non-terminal) run is
+ * still live and must be explicitly cleared/closed before a new issue is started.
+ */
+const TERMINAL_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>(['closed', 'cancelled', 'karan_merged']);
+
 /** The current run snapshot, or null when no run has been started/cleared. */
 export function getCurrentRun(): RunSnapshot | null {
   return currentRun;
@@ -275,11 +297,22 @@ export function getCurrentRun(): RunSnapshot | null {
 
 /**
  * Start a run for an issue: create it and immediately transition to
- * `issue_selected`. Replaces any existing run (the v1 dashboard tracks one run
- * at a time). Returns the resulting action result so callers can surface errors
- * uniformly with {@link dispatchRunAction}.
+ * `issue_selected`. The v1 dashboard tracks one run at a time, but a still-live
+ * run is never silently discarded — selecting a new issue while a non-terminal
+ * run exists is rejected so its in-memory log/evidence is preserved until the
+ * operator closes, cancels, or clears it. Returns the resulting action result so
+ * callers can surface errors uniformly with {@link dispatchRunAction}.
  */
 export function selectIssueRun(input: CreateRunInput): RunActionResult {
+  if (currentRun && !TERMINAL_STATUSES.has(currentRun.status)) {
+    const which = currentRun.issueNumber !== undefined ? `issue #${currentRun.issueNumber}` : currentRun.sourceId;
+    return {
+      ok: false,
+      code: 'invalid_transition',
+      error: `A run for ${which} is still active (${currentRun.status}). Close, cancel, or clear it before starting another issue.`,
+      run: currentRun,
+    };
+  }
   const created = createRun(input);
   const result = applyAction(created, 'select_issue', { now: created.createdAt });
   if (result.ok) currentRun = result.run;

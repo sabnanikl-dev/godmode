@@ -109,6 +109,63 @@ test('fix loop increments the cycle counter', () => {
   assert.equal(back.cycle, 2);
 });
 
+test('request_fix is bounded by maxCycles', () => {
+  // maxCycles: 1 means no fix cycles — the loop must not advance to a 2nd cycle.
+  const synth1 = advance(createRun({ issueNumber: 30, maxCycles: 1, now: NOW, id: 'run-cap1' }), [
+    'select_issue',
+    'mark_ready',
+    'start_builder',
+    'open_pr',
+    'start_reviewers',
+    'synthesize_reviews',
+  ]);
+  assert.equal(synth1.cycle, 1);
+  assert.ok(!synth1.availableActions.includes('request_fix'), 'request_fix must be gone at the cap');
+  const rejected = applyAction(synth1, 'request_fix', { now: NOW });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.code, 'invalid_transition');
+  assert.match(rejected.error, /budget/i);
+  assert.equal(rejected.run.status, 'review_synthesis');
+  // At the cap the operator can still escalate or merge.
+  assert.ok(synth1.availableActions.includes('exceed_max_cycles'));
+  assert.ok(synth1.availableActions.includes('mark_merge_ready'));
+
+  // maxCycles: 2 allows exactly one fix cycle, then the cap blocks the next.
+  let run = advance(createRun({ issueNumber: 31, maxCycles: 2, now: NOW, id: 'run-cap2' }), [
+    'select_issue',
+    'mark_ready',
+    'start_builder',
+    'open_pr',
+    'start_reviewers',
+    'synthesize_reviews',
+  ]);
+  assert.ok(run.availableActions.includes('request_fix'));
+  run = advance(run, ['request_fix', 'push_fix', 'rerun_reviewers', 'synthesize_reviews']);
+  assert.equal(run.cycle, 2);
+  assert.equal(applyAction(run, 'request_fix', { now: NOW }).ok, false);
+});
+
+test('selectIssueRun refuses to replace a live run but allows replacing a finished one', () => {
+  clearRun();
+  const first = selectIssueRun({ issueNumber: 40, issueTitle: 'First' });
+  assert.equal(first.ok, true);
+
+  // A live run must not be silently discarded.
+  const blocked = selectIssueRun({ issueNumber: 41, issueTitle: 'Second' });
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.code, 'invalid_transition');
+  assert.match(blocked.error, /still active/);
+  assert.equal(getCurrentRun().issueNumber, 40);
+
+  // Drive the run to a terminal state, then a new selection is allowed.
+  dispatchRunAction('cancel', { reason: 'abandon' });
+  assert.equal(getCurrentRun().status, 'cancelled');
+  const replaced = selectIssueRun({ issueNumber: 41, issueTitle: 'Second' });
+  assert.equal(replaced.ok, true);
+  assert.equal(getCurrentRun().issueNumber, 41);
+  clearRun();
+});
+
 test('pause records the resume target and resume returns to it', () => {
   const running = advance(createRun({ issueNumber: 3, now: NOW, id: 'run-pause' }), [
     'select_issue',

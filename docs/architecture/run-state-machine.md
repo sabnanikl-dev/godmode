@@ -53,8 +53,11 @@ Fix loop:
 review_synthesis → builder_fixing → fix_pushed → reviewers_rerunning → review_synthesis
 ```
 
-`request_fix` increments the `cycle` counter (the fix-loop iteration), bounded by
-`maxCycles` (operator/orchestrator enforced via `exceed_max_cycles`).
+`request_fix` increments the `cycle` counter (the fix-loop iteration) and is
+bounded by `maxCycles`: once `cycle >= maxCycles` the guard drops `request_fix`
+from `availableActions` and rejects it if attempted, so the loop stops
+deterministically at the budget. The operator/orchestrator then routes to
+`max_cycles_exceeded`, `merge_ready`, or `needs_human`.
 
 Interrupts are available from every **active** (non-terminal, non-paused) status
 and are merged into the table in one place:
@@ -94,3 +97,9 @@ The "cleared" outcome (`clearRun` / `godmode:run:clear`) discards the run so the
 dashboard returns to a no-run state. This is distinct from the `close` action,
 which records a terminal `closed` status while keeping the run and its log
 visible.
+
+A still-live run is never silently discarded: `selectIssueRun` rejects a new
+issue selection while a non-terminal run exists (only `closed`, `cancelled`, and
+`karan_merged` runs may be replaced), so its in-memory log/evidence survives
+until the operator closes, cancels, or clears it. The dashboard reflects this by
+disabling "Start run" on other issues while a run is live.

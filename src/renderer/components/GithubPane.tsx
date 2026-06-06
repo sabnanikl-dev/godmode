@@ -60,12 +60,20 @@ function reviewDecisionLabel(decision: string): string | null {
 function IssueRow({
   issue,
   isActive,
+  locked,
   onSelect,
 }: {
   issue: GithubIssue;
   isActive: boolean;
+  /** True when another run is live, so a new issue cannot be started. */
+  locked: boolean;
   onSelect?: (issueNumber: number, issueTitle: string) => void;
 }) {
+  const startTitle = isActive
+    ? 'Issue already selected for the active run'
+    : locked
+      ? 'Finish, cancel, or clear the active run before starting another issue'
+      : 'Start a run for this issue';
   return (
     <li className={isActive ? 'issue-active' : undefined}>
       <span className="status-dot" />
@@ -77,8 +85,8 @@ function IssueRow({
         {onSelect ? (
           <button
             className="issue-start"
-            disabled={isActive}
-            title={isActive ? 'Issue already selected for the active run' : 'Start a run for this issue'}
+            disabled={isActive || locked}
+            title={startTitle}
             onClick={() => onSelect(issue.number, issue.title)}
           >
             {isActive ? 'selected' : 'Start run'}
@@ -179,11 +187,17 @@ function ActivePrCard({ pr }: { pr: GithubActivePullRequest }) {
 type GithubPaneProps = {
   /** Issue number currently bound to the active run, to mark it as selected. */
   activeIssueNumber?: number | null;
+  /** True when a live run holds the slot, so other issues cannot be started. */
+  selectionLocked?: boolean;
   /** Start a run for an open issue. Omitted when issue selection is unavailable. */
   onSelectIssue?: (issueNumber: number, issueTitle: string) => void;
 };
 
-export function GithubPane({ activeIssueNumber = null, onSelectIssue }: GithubPaneProps = {}) {
+export function GithubPane({
+  activeIssueNumber = null,
+  selectionLocked = false,
+  onSelectIssue,
+}: GithubPaneProps = {}) {
   const [state, setState] = useState<GithubState | null>(null);
   const [loading, setLoading] = useState(false);
   // Monotonic id for the most recent refresh. `godmode:github:get` snapshots the
@@ -275,6 +289,7 @@ export function GithubPane({ activeIssueNumber = null, onSelectIssue }: GithubPa
                         key={issue.number}
                         issue={issue}
                         isActive={activeIssueNumber === issue.number}
+                        locked={selectionLocked}
                         onSelect={onSelectIssue}
                       />
                     ))}

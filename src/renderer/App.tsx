@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   AppRepoState,
   AgentRole,
@@ -6,6 +6,7 @@ import type {
   RolePaneConfig,
   RunAction,
   RunSnapshot,
+  RunStatus,
 } from '../shared/types.js';
 import { AgentPane } from './components/AgentPane.js';
 import { CommandPreviewPane } from './components/CommandPreviewPane.js';
@@ -28,6 +29,11 @@ const PHASE_BY_PANE: Record<AgentRole, string> = {
   reviewer_a: 'watching',
   reviewer_b: 'watching',
 };
+
+// A run in one of these is finished and may be replaced by selecting a new
+// issue; any other (live) run locks issue selection until it is cleared/closed.
+// Mirrors TERMINAL_STATUSES in src/main/run.ts, which is the authoritative guard.
+const TERMINAL_RUN_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>(['closed', 'cancelled', 'karan_merged']);
 
 const chatEvents = [
   {
@@ -61,39 +67,48 @@ export function App() {
   const [appRepo, setAppRepo] = useState<AppRepoState | null>(null);
   const [run, setRun] = useState<RunSnapshot | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
+  // Monotonic id for the latest run request. Like the GitHub pane, a run fetch
+  // snapshots state in main at invocation time, so a late `getRun()` for the
+  // previous operated project must never repopulate stale run state. Mutations
+  // bump it too, so the most recently initiated run operation always wins.
+  const runRequestSeq = useRef(0);
 
   const refreshRun = useCallback(async () => {
     if (!window.godmode) return;
+    const seq = (runRequestSeq.current += 1);
     const next = await window.godmode.getRun();
+    if (seq !== runRequestSeq.current) return;
     setRun(next ?? null);
   }, []);
 
   // Start a run for an issue selected from the GitHub pane. The main process is
-  // authoritative: it returns the resulting snapshot (or a typed rejection).
+  // authoritative: it returns the resulting snapshot (or a typed rejection, e.g.
+  // when a still-live run would be replaced).
   const selectIssue = useCallback(async (issueNumber: number, issueTitle?: string) => {
     if (!window.godmode) return;
+    const seq = (runRequestSeq.current += 1);
     const result = await window.godmode.selectIssueRun({ issueNumber, issueTitle });
-    if (result.ok) {
-      setRun(result.run);
-      setRunError(null);
-    } else {
-      setRun(result.run);
-      setRunError(result.error);
-    }
+    if (seq !== runRequestSeq.current) return;
+    setRun(result.run);
+    setRunError(result.ok ? null : result.error);
   }, []);
 
   // Drive a transition. The guard lives in main, so a rejected action leaves
   // state unchanged and we surface why instead of inventing a transition here.
   const dispatchRun = useCallback(async (action: RunAction, options?: RunDispatchOptions) => {
     if (!window.godmode) return;
+    const seq = (runRequestSeq.current += 1);
     const result = await window.godmode.dispatchRun({ action, ...options });
+    if (seq !== runRequestSeq.current) return;
     setRun(result.run);
     setRunError(result.ok ? null : result.error);
   }, []);
 
   const clearRun = useCallback(async () => {
     if (!window.godmode) return;
+    const seq = (runRequestSeq.current += 1);
     const next = await window.godmode.clearRun();
+    if (seq !== runRequestSeq.current) return;
     setRun(next ?? null);
     setRunError(null);
   }, []);
@@ -111,8 +126,11 @@ export function App() {
   useEffect(() => {
     void refreshRun();
     // A run is scoped to its operated project; main discards it on project
-    // change, so re-fetch (and clear any stale rejection) when the project flips.
+    // change. Invalidate any in-flight fetch and clear the stale snapshot
+    // immediately so the previous project's run never lingers, then re-fetch.
     const off = window.godmode?.onProjectChanged(() => {
+      runRequestSeq.current += 1;
+      setRun(null);
       setRunError(null);
       void refreshRun();
     });
@@ -260,7 +278,11 @@ export function App() {
             </div>
           </section>
 
-          <GithubPane activeIssueNumber={run?.issueNumber ?? null} onSelectIssue={selectIssue} />
+          <GithubPane
+            activeIssueNumber={run?.issueNumber ?? null}
+            selectionLocked={run !== null && !TERMINAL_RUN_STATUSES.has(run.status)}
+            onSelectIssue={selectIssue}
+          />
 
           <section className="operator-grid" aria-label="Operator features">
             <CommandPreviewPane />
