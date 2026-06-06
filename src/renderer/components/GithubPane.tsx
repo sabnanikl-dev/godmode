@@ -57,15 +57,36 @@ function reviewDecisionLabel(decision: string): string | null {
   }
 }
 
-function IssueRow({ issue }: { issue: GithubIssue }) {
+function IssueRow({
+  issue,
+  isActive,
+  onSelect,
+}: {
+  issue: GithubIssue;
+  isActive: boolean;
+  onSelect?: (issueNumber: number, issueTitle: string) => void;
+}) {
   return (
-    <li>
+    <li className={isActive ? 'issue-active' : undefined}>
       <span className="status-dot" />
       <span className="feed-num">#{issue.number}</span>
       <span className="feed-title" title={issue.title}>
         {issue.title}
       </span>
-      <span className="feed-meta">{relativeTime(issue.updatedAt)}</span>
+      <span className="feed-meta">
+        {onSelect ? (
+          <button
+            className="issue-start"
+            disabled={isActive}
+            title={isActive ? 'Issue already selected for the active run' : 'Start a run for this issue'}
+            onClick={() => onSelect(issue.number, issue.title)}
+          >
+            {isActive ? 'selected' : 'Start run'}
+          </button>
+        ) : (
+          relativeTime(issue.updatedAt)
+        )}
+      </span>
     </li>
   );
 }
@@ -155,7 +176,14 @@ function ActivePrCard({ pr }: { pr: GithubActivePullRequest }) {
   );
 }
 
-export function GithubPane() {
+type GithubPaneProps = {
+  /** Issue number currently bound to the active run, to mark it as selected. */
+  activeIssueNumber?: number | null;
+  /** Start a run for an open issue. Omitted when issue selection is unavailable. */
+  onSelectIssue?: (issueNumber: number, issueTitle: string) => void;
+};
+
+export function GithubPane({ activeIssueNumber = null, onSelectIssue }: GithubPaneProps = {}) {
   const [state, setState] = useState<GithubState | null>(null);
   const [loading, setLoading] = useState(false);
   // Monotonic id for the most recent refresh. `godmode:github:get` snapshots the
@@ -243,7 +271,12 @@ export function GithubPane() {
                 {state.issues.length > 0 ? (
                   <ul className="feed-list">
                     {state.issues.map((issue) => (
-                      <IssueRow key={issue.number} issue={issue} />
+                      <IssueRow
+                        key={issue.number}
+                        issue={issue}
+                        isActive={activeIssueNumber === issue.number}
+                        onSelect={onSelectIssue}
+                      />
                     ))}
                   </ul>
                 ) : (

@@ -1,9 +1,17 @@
-import { useEffect, useState } from 'react';
-import type { AppRepoState, AgentRole, ProjectConfigState, RolePaneConfig } from '../shared/types.js';
+import { useCallback, useEffect, useState } from 'react';
+import type {
+  AppRepoState,
+  AgentRole,
+  ProjectConfigState,
+  RolePaneConfig,
+  RunAction,
+  RunSnapshot,
+} from '../shared/types.js';
 import { AgentPane } from './components/AgentPane.js';
 import { CommandPreviewPane } from './components/CommandPreviewPane.js';
 import { GithubPane } from './components/GithubPane.js';
 import { ProjectBar } from './components/ProjectBar.js';
+import { RunControlPane, STATUS_LABEL, type RunDispatchOptions } from './components/RunControlPane.js';
 
 // UI-only presentation hints keyed by generic pane id. Kept in the renderer so
 // config stays focused on roles/agents, not styling.
@@ -51,6 +59,44 @@ const chatEvents = [
 export function App() {
   const [config, setConfig] = useState<ProjectConfigState | null>(null);
   const [appRepo, setAppRepo] = useState<AppRepoState | null>(null);
+  const [run, setRun] = useState<RunSnapshot | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
+
+  const refreshRun = useCallback(async () => {
+    if (!window.godmode) return;
+    const next = await window.godmode.getRun();
+    setRun(next ?? null);
+  }, []);
+
+  // Start a run for an issue selected from the GitHub pane. The main process is
+  // authoritative: it returns the resulting snapshot (or a typed rejection).
+  const selectIssue = useCallback(async (issueNumber: number, issueTitle?: string) => {
+    if (!window.godmode) return;
+    const result = await window.godmode.selectIssueRun({ issueNumber, issueTitle });
+    if (result.ok) {
+      setRun(result.run);
+      setRunError(null);
+    } else {
+      setRun(result.run);
+      setRunError(result.error);
+    }
+  }, []);
+
+  // Drive a transition. The guard lives in main, so a rejected action leaves
+  // state unchanged and we surface why instead of inventing a transition here.
+  const dispatchRun = useCallback(async (action: RunAction, options?: RunDispatchOptions) => {
+    if (!window.godmode) return;
+    const result = await window.godmode.dispatchRun({ action, ...options });
+    setRun(result.run);
+    setRunError(result.ok ? null : result.error);
+  }, []);
+
+  const clearRun = useCallback(async () => {
+    if (!window.godmode) return;
+    const next = await window.godmode.clearRun();
+    setRun(next ?? null);
+    setRunError(null);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -61,6 +107,19 @@ export function App() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    void refreshRun();
+    // A run is scoped to its operated project; main discards it on project
+    // change, so re-fetch (and clear any stale rejection) when the project flips.
+    const off = window.godmode?.onProjectChanged(() => {
+      setRunError(null);
+      void refreshRun();
+    });
+    return () => {
+      off?.();
+    };
+  }, [refreshRun]);
 
   useEffect(() => {
     let active = true;
@@ -113,9 +172,15 @@ export function App() {
             <span>{appRepo ? 'app repo · operates an external project' : 'Hermes command cockpit'}</span>
           </div>
           <div className="top-metrics" aria-label="Run telemetry">
-            <span>Today <strong>0.8h</strong></span>
-            <span>Cycle <strong>1/3</strong></span>
-            <span>Gate <strong>manual</strong></span>
+            <span>
+              Phase <strong>{run ? STATUS_LABEL[run.status] : 'no run'}</strong>
+            </span>
+            <span>
+              Cycle <strong>{run ? `${run.cycle}/${run.maxCycles}` : '—'}</strong>
+            </span>
+            <span>
+              Gate <strong>{run?.prNumber !== undefined ? `PR #${run.prNumber}` : 'manual'}</strong>
+            </span>
           </div>
         </header>
 
@@ -195,7 +260,7 @@ export function App() {
             </div>
           </section>
 
-          <GithubPane />
+          <GithubPane activeIssueNumber={run?.issueNumber ?? null} onSelectIssue={selectIssue} />
 
           <section className="operator-grid" aria-label="Operator features">
             <CommandPreviewPane />
@@ -208,32 +273,7 @@ export function App() {
                 </header>
                 <p>{bindingSummary ? `bindings · ${bindingSummary}` : 'no role bindings loaded'}</p>
               </div>
-              <div className="stack-section">
-                <header>
-                  <span className="section-kicker">Run Signals</span>
-                  <span className="running-label">Running</span>
-                </header>
-                <p>Local notifications · harness chat mirror · run summaries</p>
-                <div className="button-row">
-                  <button>Stop</button>
-                  <button>Set up</button>
-                </div>
-              </div>
-              <div className="stack-section">
-                <header>
-                  <span className="section-kicker">Loop Guard</span>
-                  <button>Apply</button>
-                </header>
-                <label className="guard-row">
-                  Pause after
-                  <input defaultValue="30" aria-label="Loop guard hops" />
-                  hops
-                </label>
-                <label className="checkbox-row">
-                  <input type="checkbox" />
-                  Auto-continue after pause
-                </label>
-              </div>
+              <RunControlPane run={run} error={runError} onDispatch={dispatchRun} onClear={clearRun} />
             </section>
           </section>
         </section>
