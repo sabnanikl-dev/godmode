@@ -119,6 +119,7 @@ async function runGh(args: string[], cwd: string): Promise<RunResult> {
 function emptyState(fetchedAt: string, status: GithubStatus, message?: string): GithubState {
   return {
     status,
+    partial: false,
     message,
     repo: null,
     branch: null,
@@ -128,6 +129,14 @@ function emptyState(fetchedAt: string, status: GithubStatus, message?: string): 
     fetchedAt,
   };
 }
+
+/**
+ * Carries a sub-query's data alongside whether the underlying `gh` call failed.
+ * Lets `getGithubState` distinguish "genuinely empty" from "query failed" so a
+ * partial snapshot is never reported as fully live. `failed` is only true for an
+ * actual error — a legitimately absent active PR is `{ value: null, failed: false }`.
+ */
+type Fetched<T> = { value: T; failed: boolean };
 
 function parseJson<T>(stdout: string, fallback: T): T {
   try {
@@ -158,23 +167,24 @@ function mapLabels(labels: RawLabel[] | undefined): { name: string; color: strin
   return (labels ?? []).map((label) => ({ name: label.name ?? '', color: label.color ?? '' }));
 }
 
-async function fetchIssues(cwd: string): Promise<GithubIssue[]> {
+async function fetchIssues(cwd: string): Promise<Fetched<GithubIssue[]>> {
   const result = await runGh(
     ['issue', 'list', '--state', 'open', '--limit', String(LIST_LIMIT), '--json', 'number,title,state,updatedAt,labels'],
     cwd,
   );
-  if (!result.ok) return [];
+  if (!result.ok) return { value: [], failed: true };
   type Raw = { number: number; title: string; state: string; updatedAt: string; labels?: RawLabel[] };
-  return parseJson<Raw[]>(result.stdout, []).map((issue) => ({
+  const value = parseJson<Raw[]>(result.stdout, []).map((issue) => ({
     number: issue.number,
     title: issue.title,
     state: issue.state,
     updatedAt: issue.updatedAt,
     labels: mapLabels(issue.labels),
   }));
+  return { value, failed: false };
 }
 
-async function fetchPulls(cwd: string): Promise<GithubPullRequest[]> {
+async function fetchPulls(cwd: string): Promise<Fetched<GithubPullRequest[]>> {
   const result = await runGh(
     [
       'pr',
@@ -188,8 +198,8 @@ async function fetchPulls(cwd: string): Promise<GithubPullRequest[]> {
     ],
     cwd,
   );
-  if (!result.ok) return [];
-  return parseJson<GithubPullRequest[]>(result.stdout, []).map((pr) => ({
+  if (!result.ok) return { value: [], failed: true };
+  const value = parseJson<GithubPullRequest[]>(result.stdout, []).map((pr) => ({
     number: pr.number,
     title: pr.title,
     state: pr.state,
@@ -198,6 +208,7 @@ async function fetchPulls(cwd: string): Promise<GithubPullRequest[]> {
     isDraft: Boolean(pr.isDraft),
     reviewDecision: pr.reviewDecision ?? '',
   }));
+  return { value, failed: false };
 }
 
 type RawCheck = {
@@ -209,18 +220,35 @@ type RawCheck = {
   state?: string;
 };
 
+// Still-running states (CheckRun.status / legacy StatusState) that resolve to PENDING.
+const PENDING_STATES = new Set(['IN_PROGRESS', 'QUEUED', 'PENDING', 'EXPECTED', 'WAITING', 'REQUESTED']);
+// Terminal states that are genuinely non-blocking and count as passing for a gate.
+const PASSING_STATES = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
+
+/**
+ * Collapse the many raw GitHub check states into the closed set the renderer
+ * buckets on: SUCCESS / PENDING / FAILURE. Anything terminal that is not a
+ * clear pass (FAILURE, ERROR, CANCELLED, TIMED_OUT, ACTION_REQUIRED,
+ * STARTUP_FAILURE, STALE, or any unknown value) normalizes to FAILURE so the
+ * manual merge gate can never hide a blocked check behind an unrecognized
+ * conclusion.
+ */
 function normalizeCheck(raw: RawCheck): GithubCheck {
   const name = raw.name ?? raw.context ?? 'check';
   // CheckRun uses status/conclusion; legacy StatusContext uses state.
   const conclusionRaw = (raw.conclusion || raw.state || raw.status || '').toUpperCase();
-  let conclusion = conclusionRaw;
-  if (conclusionRaw === 'IN_PROGRESS' || conclusionRaw === 'QUEUED' || conclusionRaw === 'PENDING' || conclusionRaw === 'EXPECTED') {
+  let conclusion: string;
+  if (PENDING_STATES.has(conclusionRaw)) {
     conclusion = 'PENDING';
+  } else if (PASSING_STATES.has(conclusionRaw)) {
+    conclusion = conclusionRaw;
+  } else {
+    conclusion = 'FAILURE';
   }
   return { name, conclusion };
 }
 
-async function fetchActivePr(cwd: string, branch: string | null): Promise<GithubActivePullRequest | null> {
+async function fetchActivePr(cwd: string, branch: string | null): Promise<Fetched<GithubActivePullRequest | null>> {
   // `gh pr view` with no positional argument resolves the PR for the current
   // branch; it exits non-zero when none exists, which we treat as "no active PR"
   // rather than an error.
@@ -231,7 +259,15 @@ async function fetchActivePr(cwd: string, branch: string | null): Promise<Github
     'number,title,state,updatedAt,headRefName,isDraft,reviewDecision,url,reviews,comments,statusCheckRollup',
   );
   const result = await runGh(args, cwd);
-  if (!result.ok) return null;
+  if (!result.ok) {
+    // "no PR for this branch" is the expected non-error exit — not a failed
+    // query. Anything else (timeout, bad field, scopes, network) is a real
+    // failure that must mark the snapshot partial rather than show empty.
+    const noPr = result.message.toLowerCase().includes('no pull requests found') ||
+      result.message.toLowerCase().includes('no open pull requests') ||
+      result.message.toLowerCase().includes('no closed pull requests');
+    return { value: null, failed: !noPr };
+  }
 
   type RawReview = { author?: { login?: string }; state?: string; body?: string; submittedAt?: string };
   type RawComment = { author?: { login?: string }; body?: string; createdAt?: string };
@@ -250,7 +286,8 @@ async function fetchActivePr(cwd: string, branch: string | null): Promise<Github
   };
 
   const raw = parseJson<Raw | null>(result.stdout, null);
-  if (!raw) return null;
+  // gh exited 0 but output didn't parse — an anomaly, not an absent PR.
+  if (!raw) return { value: null, failed: true };
 
   const reviews: GithubReview[] = (raw.reviews ?? [])
     // Keep only reviews that carry signal (a verdict or a body comment).
@@ -271,17 +308,20 @@ async function fetchActivePr(cwd: string, branch: string | null): Promise<Github
   const checks: GithubCheck[] = (raw.statusCheckRollup ?? []).map(normalizeCheck);
 
   return {
-    number: raw.number,
-    title: raw.title,
-    state: raw.state,
-    updatedAt: raw.updatedAt,
-    headRefName: raw.headRefName,
-    isDraft: Boolean(raw.isDraft),
-    reviewDecision: raw.reviewDecision ?? '',
-    url: raw.url ?? '',
-    reviews,
-    comments,
-    checks,
+    value: {
+      number: raw.number,
+      title: raw.title,
+      state: raw.state,
+      updatedAt: raw.updatedAt,
+      headRefName: raw.headRefName,
+      isDraft: Boolean(raw.isDraft),
+      reviewDecision: raw.reviewDecision ?? '',
+      url: raw.url ?? '',
+      reviews,
+      comments,
+      checks,
+    },
+    failed: false,
   };
 }
 
@@ -318,13 +358,33 @@ export async function getGithubState(projectRoot: string, fetchedAt: string): Pr
     fetchActivePr(cwd, branch),
   ]);
 
+  // The repo probe succeeded, but an individual sub-query can still fail (a
+  // timeout, a field/scopes error, a transient network blip). Surface that as a
+  // partial snapshot so the UI never presents incomplete data as fully live.
+  const failed: string[] = [];
+  if (issues.failed) failed.push('issues');
+  if (pulls.failed) failed.push('pull requests');
+  if (activePr.failed) failed.push('the active PR');
+  const partial = failed.length > 0;
+
   return {
     status: 'ok',
+    partial,
+    message: partial
+      ? `Showing a partial snapshot — could not load ${formatList(failed)}. Refresh to retry.`
+      : undefined,
     repo,
     branch,
-    activePr,
-    issues,
-    pulls,
+    activePr: activePr.value,
+    issues: issues.value,
+    pulls: pulls.value,
     fetchedAt,
   };
+}
+
+/** Join a short list with commas and a trailing "and": ["a","b","c"] → "a, b, and c". */
+function formatList(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? '';
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
 }

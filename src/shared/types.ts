@@ -141,7 +141,14 @@ export type GithubRepo = {
  */
 export type GithubState = {
   status: GithubStatus;
-  /** User-readable guidance, set whenever `status` is not `ok`. */
+  /**
+   * True when the repo probe succeeded (`status: 'ok'`) but one or more of the
+   * issue/PR/active-PR sub-queries failed, so the snapshot is incomplete. The
+   * UI must not present a partial snapshot as fully `live`. Always false when
+   * `status` is not `ok`.
+   */
+  partial: boolean;
+  /** User-readable guidance, set whenever `status` is not `ok` or `partial` is true. */
   message?: string;
   repo: GithubRepo | null;
   /** Current branch of the selected repo, when resolvable. */

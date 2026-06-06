@@ -15,6 +15,9 @@ const STATUS_CHIP: Record<GithubStatus, { label: string; tone: string }> = {
   error: { label: 'error', tone: 'error' },
 };
 
+// Shown when status is `ok` but the snapshot is incomplete (a sub-query failed).
+const PARTIAL_CHIP = { label: 'partial', tone: 'warn' } as const;
+
 function relativeTime(iso: string): string {
   if (!iso) return '';
   const then = new Date(iso).getTime();
@@ -86,9 +89,14 @@ function PullRow({ pr }: { pr: GithubPullRequest }) {
 
 function ActivePrCard({ pr }: { pr: GithubActivePullRequest }) {
   const decision = reviewDecisionLabel(pr.reviewDecision);
-  const failingChecks = pr.checks.filter((c) => c.conclusion === 'FAILURE' || c.conclusion === 'ERROR');
+  // Bucket as a catch-all so the manual merge gate never hides a check: only
+  // clearly-passing (SUCCESS/NEUTRAL/SKIPPED) and still-running (PENDING) states
+  // are excluded from failing — every other terminal conclusion counts as failing.
   const pendingChecks = pr.checks.filter((c) => c.conclusion === 'PENDING');
-  const passingChecks = pr.checks.filter((c) => c.conclusion === 'SUCCESS');
+  const passingChecks = pr.checks.filter(
+    (c) => c.conclusion === 'SUCCESS' || c.conclusion === 'NEUTRAL' || c.conclusion === 'SKIPPED',
+  );
+  const failingChecks = pr.checks.filter((c) => !pendingChecks.includes(c) && !passingChecks.includes(c));
 
   return (
     <section className="active-pr" aria-label="Active pull request for current branch">
@@ -167,9 +175,13 @@ export function GithubPane() {
   }, [refresh]);
 
   const status = state?.status ?? 'ok';
-  const chip = STATUS_CHIP[status];
+  // A partial snapshot (repo probe ok, but a sub-query failed) must not read as
+  // fully `live`: show a distinct "partial" chip and surface the guidance.
+  const isPartial = state ? state.status === 'ok' && state.partial : false;
+  const chip = isPartial ? PARTIAL_CHIP : STATUS_CHIP[status];
   const repoLabel = state?.repo ? `${state.repo.owner}/${state.repo.name}` : null;
   const isError = state ? state.status !== 'ok' : false;
+  const showGuidance = (isError || isPartial) && Boolean(state?.message);
 
   return (
     <section className="panel github-pane">
@@ -189,9 +201,9 @@ export function GithubPane() {
           {state?.branch ? <span className="repo-branch">⎇ {state.branch}</span> : null}
         </div>
 
-        {isError && state?.message ? (
+        {showGuidance ? (
           <div className="github-guidance" role="status">
-            {state.message}
+            {state?.message}
           </div>
         ) : null}
 
