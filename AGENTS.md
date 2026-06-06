@@ -24,9 +24,11 @@ Agents must use repo-local source of truth before inventing behavior:
 1. `AGENTS.md` — process and authority rules.
 2. `docs/spec.md` — current product/technical specification.
 3. `docs/godmode-v1-product-spec.md` — full v1 product spec.
-4. `.agentic/godmode.yaml` — default local role/workflow config.
-5. GitHub Issues/PRs/comments — task and review state.
-6. `docs/friction/` — running lessons from things that broke.
+4. `docs/architecture/` — durable technical design and module boundaries.
+5. `docs/conventions/` — standing branch, PR, testing, and coding conventions.
+6. `.agentic/godmode.yaml` — default local role/workflow config and harness doc locations.
+7. GitHub Issues/PRs/comments — task and review state.
+8. `docs/friction/` — running lessons from things that broke.
 
 Do not encode durable project rules only in one-off prompts. If a rule should guide future agents, put it in the harness docs.
 
@@ -55,12 +57,65 @@ Role names in code should be generic: `head`, `builder`, `reviewer_a`, `reviewer
 
 Prefer simple, boring implementation over clever abstractions.
 
+## CodeGraph Usage
+
+Builder and reviewer agents should use CodeGraph as a read-first repo intelligence layer when it can answer a concrete implementation or review question.
+
+CodeGraph is for:
+
+- orienting around feature, IPC, component, config, and process flows;
+- finding symbols, callers, callees, and impact before edits;
+- expanding reviewer blast-radius checks before writing review comments.
+
+CodeGraph is **not** authority. It does not replace `AGENTS.md`, specs, GitHub Issues/PRs, source diff review, tests, or Karan's final approval.
+
+### Index hygiene
+
+- Keep generated CodeGraph indexes local. Do not commit `.codegraph/`.
+- `.codegraph/` is intentionally ignored in `.gitignore` so local builder/reviewer indexing does not dirty the repo.
+- Refresh or initialize the local index before using it:
+
+```bash
+npx -y @colbymchenry/codegraph@0.9.9 sync .
+# If no index exists yet:
+npx -y @colbymchenry/codegraph@0.9.9 init .
+```
+
+### Builder expectations
+
+Before implementation, the builder should ask CodeGraph at least one concrete orientation question tied to the task. Before changing an existing exported function, component, IPC handler, config loader, or adapter boundary, check impact/call relationships where useful:
+
+```bash
+npx -y @colbymchenry/codegraph@0.9.9 query <symbol> -p .
+npx -y @colbymchenry/codegraph@0.9.9 impact <symbol> -p .
+npx -y @colbymchenry/codegraph@0.9.9 callers <symbol> -p .
+npx -y @colbymchenry/codegraph@0.9.9 callees <symbol> -p .
+```
+
+PR descriptions for implementation work should include a short section when CodeGraph was used:
+
+```md
+CodeGraph context used:
+- Query/flow checked: ...
+- Symbols/files inspected: ...
+- Blast-radius notes: ...
+- Limitations: ...
+```
+
+### Reviewer expectations
+
+Reviewers should use CodeGraph for triage around changed symbols/files, then verify with the actual diff and source. Blocking comments still require concrete file/line evidence and an actionable risk.
+
+Review summaries should include whether CodeGraph found extra graph-linked blast radius or found no additional graph-linked risk.
+
+Known limitation: CodeGraph does not fully model Electron IPC string channels yet. Reviewers must manually pair `ipcRenderer.invoke/send(...)` and `ipcMain.handle/on(...)` channels when IPC behavior changes.
+
 ## Workflow Contract
 
 ### Issue-to-PR Loop
 
 1. Karan or the head role selects an issue/task.
-2. Builder starts a fresh session for the task, then reads this harness, `docs/spec.md`, the issue, and relevant docs/comments.
+2. Builder starts a fresh session for the task, then reads this harness, `docs/spec.md`, the issue, and relevant docs/comments, including `docs/architecture/` and `docs/conventions/` when the task touches design or standing workflow rules.
 3. Builder creates a branch, implements, verifies, pushes, and opens a PR.
 4. Once a PR is detected, Reviewer A and Reviewer B start fresh review sessions, read `AGENTS.md`, the PR, linked issues, comments, and relevant docs, then review.
 5. If blockers are found, the builder starts a fresh fix session, receives accepted blockers, fixes them, pushes, and comments on the PR.

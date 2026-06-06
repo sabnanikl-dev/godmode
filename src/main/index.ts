@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { getGithubState } from './github.js';
 import { killAllPtySessions, openPtySession, resizePtySession, stopPtySession, writeToPtySession } from './pty.js';
 import { getProjectState, getSelectedProjectRoot, selectProject } from './project.js';
+import { getConfigState } from './config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,6 +60,11 @@ function selectProjectAndResetSessions(input: string) {
         mainWindow.webContents.send('godmode:pty:exit', { paneId, exit: { exitCode: 0 } });
       }
     }
+    // Role/agent config is project-local, so the renderer must reload it (panes,
+    // labels, command hints) whenever the active root changes.
+    if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+      mainWindow.webContents.send('godmode:project:changed', state);
+    }
   }
 
   return state;
@@ -96,6 +102,8 @@ function createWindow(): void {
 
 app.whenReady().then(() => {
   ipcMain.handle('godmode:project:get', () => getProjectState());
+
+  ipcMain.handle('godmode:config:get', () => getConfigState());
 
   ipcMain.handle('godmode:project:select', (_event, input: unknown) => {
     const payload = parseIpcPayload(projectSelectSchema, input);
