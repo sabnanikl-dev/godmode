@@ -172,6 +172,17 @@ export function GithubPane() {
 
   useEffect(() => {
     void refresh();
+    // The GitHub snapshot belongs to the operated project. When the operated
+    // project changes, clear the stale snapshot immediately so the previous
+    // repo's issues/PRs never linger under the new project's label, then
+    // refetch for the newly selected project.
+    const off = window.godmode?.onProjectChanged(() => {
+      setState(null);
+      void refresh();
+    });
+    return () => {
+      off?.();
+    };
   }, [refresh]);
 
   const status = state?.status ?? 'ok';
