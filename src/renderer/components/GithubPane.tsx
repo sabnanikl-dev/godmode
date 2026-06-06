@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   GithubActivePullRequest,
   GithubIssue,
@@ -158,15 +158,25 @@ function ActivePrCard({ pr }: { pr: GithubActivePullRequest }) {
 export function GithubPane() {
   const [state, setState] = useState<GithubState | null>(null);
   const [loading, setLoading] = useState(false);
+  // Monotonic id for the most recent refresh. `godmode:github:get` snapshots the
+  // selected project root at invocation time, so an older request for project A
+  // can resolve after the operator switches to project B. Only the latest
+  // request may apply its result, so a late A response can never repopulate the
+  // pane with A's issues/PRs under the current project's label.
+  const requestSeq = useRef(0);
 
   const refresh = useCallback(async () => {
     if (!window.godmode) return;
+    const seq = (requestSeq.current += 1);
     setLoading(true);
     try {
       const next = await window.godmode.getGithub();
+      // A newer refresh (e.g. after a project change) superseded this one.
+      if (seq !== requestSeq.current) return;
       if (next) setState(next);
     } finally {
-      setLoading(false);
+      // Leave the loading flag to whichever request is now current.
+      if (seq === requestSeq.current) setLoading(false);
     }
   }, []);
 
@@ -177,6 +187,9 @@ export function GithubPane() {
     // repo's issues/PRs never linger under the new project's label, then
     // refetch for the newly selected project.
     const off = window.godmode?.onProjectChanged(() => {
+      // Invalidate any in-flight request for the previous project, clear the
+      // stale snapshot, then refetch for the new operated project.
+      requestSeq.current += 1;
       setState(null);
       void refresh();
     });
