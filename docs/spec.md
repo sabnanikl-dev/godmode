@@ -176,10 +176,11 @@ findings: it parses each reviewer's `DONE` marker, PASS line, and `BLOCKING` blo
 routes missing/malformed/contradictory output to `needs_human` rather than ever
 treating it as a pass. The **merge gate** is reached only when both reviewers clear
 **and** the #9 commit evidence is verified **and** no accepted blockers remain — a
-reviewer self-report alone is never enough. When accepted blockers exist, GodMode
-opens a fix cycle and renders a pointer-first `builder_fix` handoff carrying the
-normalized blocker text (never a transcript dump) plus pointers back to the live
-PR/review artifacts. The verified-commit gate runs again before reviewers re-review
+reviewer self-report alone is never enough. When accepted blockers exist **and the
+#9 gate is verified**, GodMode opens a fix cycle and renders a pointer-first
+`builder_fix` handoff carrying the normalized blocker text (never a transcript dump)
+plus pointers back to the live PR/review artifacts; blockers with an unverified PR
+hold until re-verification rather than fixing a stale target. The verified-commit gate runs again before reviewers re-review
 the fix, and max-cycle limits stay authoritative in the run state machine. Findings
 are stored on the run and mirrored to `.godmode/runs/<run-id>/findings.json`. See
 `docs/architecture/review-synthesis.md`.

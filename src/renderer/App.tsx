@@ -220,8 +220,10 @@ export function App() {
     }
   }, []);
 
-  // Send the rendered fix handoff into the builder session. Main re-verifies,
-  // recomposes the fix prompt from the run's accepted blockers, and writes it in.
+  // Send the rendered fix handoff into the builder session. Main does no live gh
+  // round trip — it gates on the recorded verified merge findings (prVerified +
+  // bound PR URL), recomposes the fix prompt from the run's accepted blockers, and
+  // writes it in.
   const sendFix = useCallback(async () => {
     if (!window.godmode) return;
     setSendingFix(true);
