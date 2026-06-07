@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { getAppRepoState } from './appRepo.js';
-import { getCommitVerification, getGithubState, getIssueDetail } from './github.js';
+import { getCommitVerification, getGithubState, getIssueDetail, postPrComment } from './github.js';
 import {
   hasPtySession,
   killAllPtySessions,
@@ -13,7 +13,7 @@ import {
   writeToPtySession,
 } from './pty.js';
 import { getProjectState, getSelectedProjectRoot, selectProject } from './project.js';
-import { getConfigState } from './config.js';
+import { DEFAULT_CONFIG, getConfigState, loadConfig } from './config.js';
 import { getRegistryState, resolveRoleLaunch } from './agents.js';
 import {
   clearRun,
@@ -23,9 +23,21 @@ import {
   recordCurrentRunVerification,
   selectIssueRun,
   selectManualTaskRun,
+  setCurrentRunReviewers,
+  updateCurrentRunReviewer,
 } from './run.js';
 import { getCurrentHandoff, promptDigest } from './handoff.js';
-import type { HandoffSendResult, RunSourceDetail, RunVerificationResult } from '../shared/types.js';
+import { ensureRunArtifactDir, appendArtifact, reviewerArtifactPath } from './artifacts.js';
+import { composeReviewerLaunch, reviewerArtifactRelPath, reviewerCommentBody } from './reviewer.js';
+import type {
+  AgentRole,
+  HandoffSendResult,
+  ReviewerCommentResult,
+  RunSnapshot,
+  RunSourceDetail,
+  RunVerificationResult,
+  StartReviewersResult,
+} from '../shared/types.js';
 import { GODMODE_IPC } from '../shared/ipcChannels.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -88,6 +100,8 @@ const runDispatchSchema = z.object({
     .optional(),
 });
 const githubIssueSchema = z.object({ issueNumber: z.number().int().positive() });
+const reviewerPaneSchema = z.enum(['reviewer_a', 'reviewer_b']);
+const reviewerCommentSchema = z.object({ paneId: reviewerPaneSchema });
 const runSelectManualSchema = z.object({
   title: z.string().min(1).max(200),
   text: z.string().min(1).max(20_000),
@@ -356,6 +370,260 @@ async function handleVerifyRun(): Promise<RunVerificationResult> {
   return { verification, run: updatedRun };
 }
 
+/** Push a payload to the renderer if a live window exists (mirrors `projectChanged`). */
+function emitToRenderer(channel: string, payload: unknown): void {
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send(channel, payload);
+  }
+}
+
+/** Push the latest run snapshot so async reviewer lifecycle changes reach the UI. */
+function emitRunChanged(run: RunSnapshot | null): void {
+  emitToRenderer(GODMODE_IPC.runChanged, run);
+}
+
+/**
+ * Post one reviewer's concise role-signed marker comment to the run's PR and
+ * record the outcome on its tracked session (issue #10). Shared by the auto-post
+ * on session exit and the operator override. On any failure the reviewer is
+ * marked `failed` with a visible reason — review is never silently completed —
+ * and `runChanged` is emitted either way so the dashboard reflects the result.
+ */
+async function postReviewerCommentAndRecord(paneId: AgentRole): Promise<ReviewerCommentResult> {
+  const run = getCurrentRun();
+  if (!run) {
+    return { ok: false, code: 'no_run', error: 'There is no active run.', run: null };
+  }
+  const session = run.reviewers?.find((reviewer) => reviewer.paneId === paneId);
+  if (!session) {
+    return { ok: false, code: 'unknown_reviewer', error: `No tracked reviewer session for pane ${paneId}.`, run };
+  }
+  if (run.prNumber === undefined) {
+    const updated =
+      updateCurrentRunReviewer(paneId, {
+        status: 'failed',
+        error: 'No PR number recorded for this run; cannot post a reviewer comment.',
+      }) ?? run;
+    emitRunChanged(updated);
+    return { ok: false, code: 'no_pr', error: 'No PR number is recorded for this run.', run: updated };
+  }
+
+  const artifactRelPath = session.artifactPath ?? reviewerArtifactRelPath(run.id, session.reviewerId);
+  const body = reviewerCommentBody({
+    reviewerId: session.reviewerId,
+    displayName: session.displayName,
+    roleDoc: session.roleDoc,
+    prNumber: run.prNumber,
+    branch: run.branch,
+    artifactRelPath,
+  });
+
+  const result = await postPrComment(getSelectedProjectRoot(), run.prNumber, body);
+  if (!result.ok) {
+    const updated =
+      updateCurrentRunReviewer(paneId, { status: 'failed', error: `Comment post failed: ${result.message}` }) ?? run;
+    emitRunChanged(updated);
+    return { ok: false, code: 'comment_failed', error: result.message, run: updated };
+  }
+
+  const updated =
+    updateCurrentRunReviewer(paneId, {
+      status: 'comment_posted',
+      commentPosted: true,
+      commentUrl: result.url,
+      error: undefined,
+    }) ?? run;
+  emitRunChanged(updated);
+  return { ok: true, run: updated, commentUrl: result.url };
+}
+
+/**
+ * Handle a reviewer PTY session exit: mark the session `completed` (capturing the
+ * exit code), then auto-post the role-signed marker comment. A reviewer that
+ * already failed to launch has no live session, so this only fires for sessions
+ * that actually ran.
+ */
+async function handleReviewerExit(paneId: AgentRole, exitCode: number): Promise<void> {
+  const run = getCurrentRun();
+  if (!run?.reviewers?.some((reviewer) => reviewer.paneId === paneId)) return;
+  const updated = updateCurrentRunReviewer(paneId, { status: 'completed', exitCode });
+  emitRunChanged(updated);
+  await postReviewerCommentAndRecord(paneId);
+}
+
+/** Statuses from which reviewers may be launched: a freshly opened PR, or a relaunch. */
+const REVIEWER_START_STATUSES = new Set(['pr_opened', 'reviewers_running']);
+
+/**
+ * Launch Reviewer A and B from a verified PR (issue #10). Order of operations:
+ * re-run the #9 commit-verification gate live and record it — plain PR existence
+ * or an agent self-report is never enough — and refuse to launch unless it is
+ * `verified`. Then compose pointer-first prompts bound to the verified PR, prepare
+ * the run-artifact dir, and launch each configured reviewer independently in the
+ * operated-project root, capturing stdout/stderr to a local artifact and writing
+ * the prompt into the session. Each reviewer's lifecycle is tracked on the run so
+ * a launch failure is visible and never silently marked complete. Advancing to
+ * `reviewers_running` also records the PR number/branch so the later comment post
+ * has its coordinates.
+ */
+async function handleStartReviewers(): Promise<StartReviewersResult> {
+  const run = getCurrentRun();
+  if (!run) {
+    return { ok: false, code: 'no_run', error: 'There is no active run to start reviewers for.', run: null };
+  }
+  const relaunch = run.status === 'reviewers_running';
+  if (!REVIEWER_START_STATUSES.has(run.status)) {
+    return {
+      ok: false,
+      code: 'invalid_state',
+      error: `Reviewers start from a PR-opened run (current: ${run.status}).`,
+      run,
+    };
+  }
+
+  const projectRoot = getSelectedProjectRoot();
+  const now = new Date().toISOString();
+
+  // #9 evidence gate: re-verify live and record it. Never trust plain PR
+  // existence or an agent self-report as enough to launch reviewers.
+  const verification = await getCommitVerification(projectRoot, { expectedCommit: run.expectedCommit }, now);
+  let updated = recordCurrentRunVerification(verification) ?? run;
+  if (verification.status !== 'verified' || !verification.pr) {
+    emitRunChanged(updated);
+    return { ok: false, code: 'not_verified', error: verification.message, run: updated, verification };
+  }
+
+  const loaded = loadConfig();
+  const config = loaded.status === 'loaded' ? loaded.config : DEFAULT_CONFIG;
+  const pr = {
+    number: verification.pr.number,
+    url: verification.pr.url,
+    branch: verification.pr.headRefName || verification.branch || '',
+  };
+  const plan = composeReviewerLaunch(config, updated, { projectName: loaded.projectName, pr, verified: true });
+  if (plan.reviewers.length === 0) {
+    return {
+      ok: false,
+      code: 'no_reviewers_configured',
+      error: 'No reviewers are configured for this project.',
+      run: updated,
+      verification,
+    };
+  }
+  if (!plan.canStart) {
+    return {
+      ok: false,
+      code: 'not_startable',
+      error: plan.blockedReason ?? 'Reviewers are not ready to launch.',
+      run: updated,
+      verification,
+    };
+  }
+
+  ensureRunArtifactDir(projectRoot, updated.id);
+
+  // Record every reviewer as `launching` first so the dashboard shows tracked
+  // reviewers even when a subsequent launch fails.
+  updated =
+    setCurrentRunReviewers(
+      plan.reviewers.map((reviewer) => ({
+        reviewerId: reviewer.reviewerId,
+        paneId: reviewer.paneId,
+        displayName: reviewer.displayName,
+        roleDoc: reviewer.roleDoc,
+        status: 'launching' as const,
+        artifactPath: reviewerArtifactRelPath(updated.id, reviewer.reviewerId),
+        promptChars: reviewer.prompt.length,
+        commentPosted: false,
+      })),
+      now,
+    ) ?? updated;
+
+  let launched = 0;
+  for (const reviewer of plan.reviewers) {
+    // Reuse the role→command resolver so the cli-adapter gate and visible errors
+    // are identical to a manual pane launch (non-cli adapters fail visibly here).
+    const resolved = resolveRoleLaunch(reviewer.paneId);
+    if (!resolved.ok) {
+      updateCurrentRunReviewer(reviewer.paneId, { status: 'failed', error: resolved.error });
+      continue;
+    }
+
+    const absArtifact = reviewerArtifactPath(projectRoot, updated.id, reviewer.reviewerId);
+    const result = openPtySession({
+      paneId: reviewer.paneId,
+      projectRoot,
+      command: resolved.spec.command,
+      onData: (data) => {
+        appendArtifact(absArtifact, data);
+        emitToRenderer(GODMODE_IPC.ptyData, { paneId: reviewer.paneId, data });
+      },
+      onExit: (exit) => {
+        emitToRenderer(GODMODE_IPC.ptyExit, { paneId: reviewer.paneId, exit });
+        void handleReviewerExit(reviewer.paneId, exit.exitCode);
+      },
+    });
+    if (!result.ok) {
+      updateCurrentRunReviewer(reviewer.paneId, { status: 'failed', error: `Launch failed: ${result.error}` });
+      continue;
+    }
+
+    // Deliver the pointer-first prompt into the live reviewer PTY, mirroring the
+    // builder handoff: the trailing carriage return commits the input line.
+    writeToPtySession(reviewer.paneId, `${reviewer.prompt}\r`);
+    updateCurrentRunReviewer(reviewer.paneId, { status: 'running', pid: result.pid });
+    launched += 1;
+  }
+
+  if (launched === 0) {
+    updated = getCurrentRun() ?? updated;
+    emitRunChanged(updated);
+    return {
+      ok: false,
+      code: 'not_startable',
+      error: 'All reviewer launches failed; see the reviewer statuses for the reason.',
+      run: updated,
+      verification,
+    };
+  }
+
+  // Advance pr_opened → reviewers_running once, recording the PR number/branch so
+  // the later comment post has its coordinates. A relaunch is already in that
+  // state, so the run keeps its recorded coordinates.
+  if (!relaunch) {
+    const advanced = dispatchRunAction('start_reviewers', {
+      reason: `Launched ${launched} reviewer session(s) for PR #${pr.number}.`,
+      prNumber: pr.number,
+      branch: pr.branch,
+    });
+    if (advanced.ok) updated = advanced.run;
+  }
+  updated = getCurrentRun() ?? updated;
+  emitRunChanged(updated);
+  return { ok: true, run: updated, verification };
+}
+
+/**
+ * Operator override / re-post for one reviewer's marker comment (issue #10):
+ * post (or re-post) the role-signed marker for the named reviewer pane. Used for
+ * interactive reviewers that never exit, or to retry a failed post.
+ */
+function handlePostReviewerComment(
+  _event: Electron.IpcMainInvokeEvent,
+  input: unknown,
+): Promise<ReviewerCommentResult> {
+  const payload = parseIpcPayload(reviewerCommentSchema, input);
+  if (!payload) {
+    return Promise.resolve({
+      ok: false,
+      code: 'unknown_reviewer',
+      error: 'Invalid reviewer comment payload.',
+      run: getCurrentRun(),
+    });
+  }
+  return postReviewerCommentAndRecord(payload.paneId);
+}
+
 function handleDispatchRun(_event: Electron.IpcMainInvokeEvent, input: unknown) {
   const payload = parseIpcPayload(runDispatchSchema, input);
   if (!payload) {
@@ -429,6 +697,8 @@ function registerIpcHandlers(): void {
   ipcMain.handle(GODMODE_IPC.runHandoffGet, handleGetHandoff);
   ipcMain.handle(GODMODE_IPC.runHandoffSend, handleSendHandoff);
   ipcMain.handle(GODMODE_IPC.runVerify, handleVerifyRun);
+  ipcMain.handle(GODMODE_IPC.runStartReviewers, handleStartReviewers);
+  ipcMain.handle(GODMODE_IPC.runReviewerComment, handlePostReviewerComment);
   ipcMain.handle(GODMODE_IPC.ptyStart, handleStartPty);
   ipcMain.on(GODMODE_IPC.ptyWrite, handleWritePty);
   ipcMain.on(GODMODE_IPC.ptyResize, handleResizePty);
