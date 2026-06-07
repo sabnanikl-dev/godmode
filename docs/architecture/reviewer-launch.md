@@ -23,14 +23,22 @@ branches on a specific vendor beyond display labels.
 
 ## The #9 verified-PR gate
 
-`handleStartReviewers` accepts only a run at `pr_opened` (or `reviewers_running`
-for an idempotent relaunch). Before launching anything it **re-runs
+`handleStartReviewers` accepts a run at one of the reviewer-launch statuses (see
+the lifecycle section). Before launching anything it **re-runs
 `getCommitVerification` live** and records the result on the run, then refuses to
 launch unless the status is `verified` with a matched PR. Plain PR existence, a
 PR URL, or an agent self-report is never sufficient — the launch path consumes
 the same evidence layer the merge-ready decision does. The verification is
 returned with the result so a `not_verified` rejection explains itself with the
 live message.
+
+Because that verification is `await`ed, the operator could switch the operated
+project (or clear the run) mid-call — `selectProjectAndResetSessions` clears the
+run and kills sessions. So after the await, before any side effect, the handler
+**re-confirms the same run id and selected root** captured at the start; if either
+changed it aborts without spawning a PTY or writing an artifact, honoring the
+AGENTS.md rule that agent commands only ever run in the currently selected
+operated-project root.
 
 ## Pointer-first prompts
 
@@ -117,7 +125,13 @@ element (no shell), so there is no quoting/injection surface.
 
 `godmode:run:reviewers:comment` is the operator override: it re-posts the marker
 for a named reviewer pane, covering interactive reviewers that never exit and
-retrying a failed post.
+retrying a failed post. The override is gated by `canPostReviewerMarker(status)`:
+only a session that actually ran (`completed` / `comment_posted` / `running`) is
+postable, so a `failed` (launch/capture/non-zero-exit) or still-`launching`
+reviewer can **never** be turned into the green `comment_posted` state from the UI
+or IPC. A *comment-post* failure is recorded on a separate `commentError` field
+(not the session `error`/status), so it stays retryable without masking — or being
+masked by — the session's own outcome.
 
 A successful post mutates the PR, so the operated project's GitHub snapshot is now
 stale. The main process emits `godmode:github:changed`, and the GitHub pane
@@ -144,8 +158,9 @@ GitHub pane refreshes its snapshot on the same signal.
 to PR/reviewer/role-doc with no pasted diff, `missingVariables`, the verified gate),
 `reviewerCommentBody` (role-signed, artifact-referencing, no merge-readiness claim),
 `reviewerLaunchTransition` (initial + fix-cycle launch/relaunch, disallowed
-statuses), and `resolveReviewerExit` (non-zero exit → failed/no-post, clean exit →
-completed, already-failed kept). `test/artifacts.test.js` covers the artifact
+statuses), `resolveReviewerExit` (non-zero exit → failed/no-post, clean exit →
+completed, already-failed kept), and `canPostReviewerMarker` (only a ran session is
+postable; failed/launching are not). `test/artifacts.test.js` covers the artifact
 path/dir/append helpers over a
 temp dir, the captured-write success/failure return, and the reviewer-id
 path-confinement guard. `test/run.test.js` covers the reviewer-session reducers

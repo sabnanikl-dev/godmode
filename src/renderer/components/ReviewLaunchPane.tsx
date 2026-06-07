@@ -29,6 +29,12 @@ function statusTone(status: ReviewerSessionStatus): string {
 const STARTABLE_RUN_STATUSES = ['pr_opened', 'reviewers_running', 'fix_pushed', 'reviewers_rerunning'];
 const RELAUNCH_RUN_STATUSES = ['reviewers_running', 'reviewers_rerunning'];
 
+// Reviewer statuses for which a marker comment may be (re)posted, mirroring
+// canPostReviewerMarker in src/main/reviewer.ts. A failed (launch/capture/non-zero
+// exit) or still-launching reviewer is intentionally excluded so the operator
+// override can never convert a failure into the green comment_posted state.
+const POSTABLE_REVIEWER_STATUSES: ReviewerSessionStatus[] = ['completed', 'comment_posted', 'running'];
+
 type ReviewLaunchPaneProps = {
   run: RunSnapshot | null;
   /** Most recent start rejection (e.g. not_verified), surfaced inline. */
@@ -108,21 +114,31 @@ export function ReviewLaunchPane({ run, startError, starting, onStart, onPostCom
                   {reviewer.error}
                 </p>
               ) : null}
-              <div className="reviewer-row-actions">
-                <button
-                  onClick={() => onPostComment(reviewer.paneId as 'reviewer_a' | 'reviewer_b')}
-                  disabled={run?.prNumber === undefined}
-                  title={
-                    run?.prNumber === undefined
-                      ? 'No PR number recorded for this run.'
-                      : reviewer.commentPosted
-                        ? 'Re-post the role-signed marker comment'
-                        : 'Post the role-signed marker comment now'
-                  }
-                >
-                  {reviewer.commentPosted ? 'Re-post comment' : 'Post comment'}
-                </button>
-              </div>
+              {reviewer.commentError ? (
+                <p className="run-error" role="alert">
+                  {reviewer.commentError}
+                </p>
+              ) : null}
+              {/* Only a session that actually ran can be marked — a failed
+                  reviewer must never be turned green via a manual marker post.
+                  Mirrors canPostReviewerMarker in src/main/reviewer.ts. */}
+              {POSTABLE_REVIEWER_STATUSES.includes(reviewer.status) ? (
+                <div className="reviewer-row-actions">
+                  <button
+                    onClick={() => onPostComment(reviewer.paneId as 'reviewer_a' | 'reviewer_b')}
+                    disabled={run?.prNumber === undefined}
+                    title={
+                      run?.prNumber === undefined
+                        ? 'No PR number recorded for this run.'
+                        : reviewer.commentPosted
+                          ? 'Re-post the role-signed marker comment'
+                          : 'Post the role-signed marker comment now'
+                    }
+                  >
+                    {reviewer.commentPosted ? 'Re-post comment' : 'Post comment'}
+                  </button>
+                </div>
+              ) : null}
             </li>
           ))}
         </ul>

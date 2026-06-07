@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  canPostReviewerMarker,
   composeReviewerLaunch,
   resolveReviewerExit,
   reviewerCommentBody,
@@ -186,4 +187,17 @@ test('a non-zero reviewer exit becomes failed with no auto marker comment', () =
   // A capture failure already flipped it to failed mid-run — keep it failed.
   assert.deepEqual(resolveReviewerExit('failed', 0), { kind: 'keep_failed' });
   assert.deepEqual(resolveReviewerExit('failed', 1), { kind: 'keep_failed' });
+});
+
+test('only a reviewer session that actually ran can have its marker posted', () => {
+  // Postable: a session that ran (and re-post of an already-posted one).
+  assert.equal(canPostReviewerMarker('completed'), true);
+  assert.equal(canPostReviewerMarker('comment_posted'), true);
+  assert.equal(canPostReviewerMarker('running'), true);
+
+  // Not postable: a failed (launch/capture/non-zero exit) or not-yet-run session,
+  // so the operator override can never turn a failure green.
+  assert.equal(canPostReviewerMarker('failed'), false);
+  assert.equal(canPostReviewerMarker('launching'), false);
+  assert.equal(canPostReviewerMarker('idle'), false);
 });

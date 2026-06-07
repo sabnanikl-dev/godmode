@@ -244,6 +244,22 @@ export type ReviewerExitOutcome =
   | { kind: 'failed'; error: string }
   | { kind: 'completed' };
 
+/**
+ * Whether a reviewer session is in a state where posting (or re-posting) its
+ * role-signed marker comment is allowed. Only sessions that actually ran are
+ * postable: a clean-exited `completed` session, an already-`comment_posted` one
+ * (re-post), or a still-live `running` interactive reviewer the operator chooses
+ * to mark. A `failed` session (launch/capture/non-zero exit) or one still
+ * `launching` is NOT postable — otherwise the operator override could convert a
+ * failed reviewer into the confirmed-success `comment_posted` state, breaking the
+ * "failures never collapse into complete/comment-posted" contract.
+ */
+const POSTABLE_REVIEWER_STATUSES: readonly ReviewerSessionStatus[] = ['completed', 'comment_posted', 'running'];
+
+export function canPostReviewerMarker(status: ReviewerSessionStatus): boolean {
+  return POSTABLE_REVIEWER_STATUSES.includes(status);
+}
+
 export function resolveReviewerExit(status: ReviewerSessionStatus, exitCode: number): ReviewerExitOutcome {
   if (status === 'failed') return { kind: 'keep_failed' };
   if (exitCode !== 0) {

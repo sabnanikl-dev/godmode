@@ -34,6 +34,7 @@ import {
   reviewerArtifactRelPath,
 } from './artifacts.js';
 import {
+  canPostReviewerMarker,
   composeReviewerLaunch,
   resolveReviewerExit,
   reviewerCommentBody,
@@ -395,9 +396,15 @@ function emitRunChanged(run: RunSnapshot | null): void {
 /**
  * Post one reviewer's concise role-signed marker comment to the run's PR and
  * record the outcome on its tracked session (issue #10). Shared by the auto-post
- * on session exit and the operator override. On any failure the reviewer is
- * marked `failed` with a visible reason — review is never silently completed —
- * and `runChanged` is emitted either way so the dashboard reflects the result.
+ * on a clean session exit and the operator override.
+ *
+ * A *session* failure (launch/capture/non-zero exit) is terminal and refused
+ * here: only a session that actually ran (`completed`/`comment_posted`/`running`)
+ * is postable, so a failed reviewer can never be turned into the confirmed-success
+ * `comment_posted` state. A *comment-post* failure is recorded on the separate
+ * `commentError` field (not the session `error`/status), so it stays retryable via
+ * the override without masking, or being masked by, the session's own outcome.
+ * `runChanged` is emitted either way so the dashboard reflects the result.
  */
 async function postReviewerCommentAndRecord(paneId: AgentRole): Promise<ReviewerCommentResult> {
   const run = getCurrentRun();
@@ -408,11 +415,19 @@ async function postReviewerCommentAndRecord(paneId: AgentRole): Promise<Reviewer
   if (!session) {
     return { ok: false, code: 'unknown_reviewer', error: `No tracked reviewer session for pane ${paneId}.`, run };
   }
+  // A failed (or not-yet-run) session must never become green via a marker post.
+  if (!canPostReviewerMarker(session.status)) {
+    return {
+      ok: false,
+      code: 'invalid_state',
+      error: `Reviewer ${session.reviewerId} did not complete (${session.status}); its marker comment cannot be posted.`,
+      run,
+    };
+  }
   if (run.prNumber === undefined) {
     const updated =
       updateCurrentRunReviewer(paneId, {
-        status: 'failed',
-        error: 'No PR number recorded for this run; cannot post a reviewer comment.',
+        commentError: 'No PR number recorded for this run; cannot post a reviewer comment.',
       }) ?? run;
     emitRunChanged(updated);
     return { ok: false, code: 'no_pr', error: 'No PR number is recorded for this run.', run: updated };
@@ -430,8 +445,10 @@ async function postReviewerCommentAndRecord(paneId: AgentRole): Promise<Reviewer
 
   const result = await postPrComment(getSelectedProjectRoot(), run.prNumber, body);
   if (!result.ok) {
+    // Record on `commentError`, not the session status: the session outcome is
+    // unchanged and the post stays retryable via the override.
     const updated =
-      updateCurrentRunReviewer(paneId, { status: 'failed', error: `Comment post failed: ${result.message}` }) ?? run;
+      updateCurrentRunReviewer(paneId, { commentError: `Comment post failed: ${result.message}` }) ?? run;
     emitRunChanged(updated);
     return { ok: false, code: 'comment_failed', error: result.message, run: updated };
   }
@@ -441,7 +458,7 @@ async function postReviewerCommentAndRecord(paneId: AgentRole): Promise<Reviewer
       status: 'comment_posted',
       commentPosted: true,
       commentUrl: result.url,
-      error: undefined,
+      commentError: undefined,
     }) ?? run;
   emitRunChanged(updated);
   // The PR now has a new comment, so the operated project's GitHub snapshot is
@@ -510,13 +527,31 @@ async function handleStartReviewers(): Promise<StartReviewersResult> {
     };
   }
 
+  const startRunId = run.id;
   const projectRoot = getSelectedProjectRoot();
   const now = new Date().toISOString();
 
   // #9 evidence gate: re-verify live and record it. Never trust plain PR
   // existence or an agent self-report as enough to launch reviewers.
   const verification = await getCommitVerification(projectRoot, { expectedCommit: run.expectedCommit }, now);
-  let updated = recordCurrentRunVerification(verification) ?? run;
+
+  // Stale guard: the operator may have switched the operated project (or cleared
+  // the run) during the await above — `selectProjectAndResetSessions` clears the
+  // run and kills sessions. Re-confirm the same run and root before any side
+  // effect, so a stale invocation can never spawn PTYs or write artifacts into a
+  // root the run no longer belongs to (AGENTS.md operated-project safety rule).
+  const live = getCurrentRun();
+  if (!live || live.id !== startRunId || getSelectedProjectRoot() !== projectRoot) {
+    return {
+      ok: false,
+      code: 'invalid_state',
+      error: 'The run or operated project changed during verification; reviewers were not launched.',
+      run: live,
+      verification,
+    };
+  }
+
+  let updated = recordCurrentRunVerification(verification) ?? live;
   if (verification.status !== 'verified' || !verification.pr) {
     emitRunChanged(updated);
     return { ok: false, code: 'not_verified', error: verification.message, run: updated, verification };

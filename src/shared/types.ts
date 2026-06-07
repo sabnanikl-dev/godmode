@@ -793,8 +793,19 @@ export type ReviewerSessionState = {
   commentPosted: boolean;
   /** URL of the posted marker comment, when `gh` reported one. */
   commentUrl?: string;
-  /** Visible reason for a `failed` status (launch/capture/comment failure). */
+  /**
+   * Visible reason for a `failed` status: a terminal *session* failure (launch
+   * failure, output-capture failure, or non-zero exit). Distinct from
+   * {@link commentError} so a session failure can never be cleared by a later
+   * marker post — a failed reviewer never collapses into a success state.
+   */
   error?: string;
+  /**
+   * Visible reason a marker *comment post* failed (or was refused), kept separate
+   * from {@link error} so it stays retryable via the operator override without
+   * masking — or being masked by — the session's own outcome.
+   */
+  commentError?: string;
   /** ISO timestamp this session state last changed. */
   updatedAt: string;
 };
