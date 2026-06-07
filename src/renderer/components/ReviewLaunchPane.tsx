@@ -22,9 +22,12 @@ function statusTone(status: ReviewerSessionStatus): string {
 }
 
 // Statuses from which reviewers may be (re)launched, mirroring
-// REVIEWER_START_STATUSES in src/main/index.ts (the main process re-validates and
-// re-runs the #9 verification gate, so this only avoids an obviously-dead click).
-const STARTABLE_RUN_STATUSES = ['pr_opened', 'reviewers_running'];
+// reviewerLaunchTransition in src/main/reviewer.ts: the initial PR (`pr_opened`)
+// and after a builder fix (`fix_pushed`), plus their already-running relaunch
+// states. The main process re-validates and re-runs the #9 verification gate, so
+// this only avoids an obviously-dead click.
+const STARTABLE_RUN_STATUSES = ['pr_opened', 'reviewers_running', 'fix_pushed', 'reviewers_rerunning'];
+const RELAUNCH_RUN_STATUSES = ['reviewers_running', 'reviewers_rerunning'];
 
 type ReviewLaunchPaneProps = {
   run: RunSnapshot | null;
@@ -49,7 +52,7 @@ type ReviewLaunchPaneProps = {
 export function ReviewLaunchPane({ run, startError, starting, onStart, onPostComment }: ReviewLaunchPaneProps) {
   const reviewers: ReviewerSessionState[] = run?.reviewers ?? [];
   const canStart = run !== null && STARTABLE_RUN_STATUSES.includes(run.status);
-  const relaunch = run?.status === 'reviewers_running';
+  const relaunch = run !== null && RELAUNCH_RUN_STATUSES.includes(run.status);
   const launched = reviewers.length > 0;
 
   const headerChip = !run
@@ -142,7 +145,7 @@ export function ReviewLaunchPane({ run, startError, starting, onStart, onPostCom
           title={
             canStart
               ? 'Verify the PR (#9) and launch both reviewers'
-              : 'Reviewers launch from a PR-opened run.'
+              : 'Reviewers launch from a PR-opened or fix-pushed run.'
           }
         >
           {starting ? 'Launching…' : relaunch ? 'Relaunch reviewers' : 'Start reviewers'}

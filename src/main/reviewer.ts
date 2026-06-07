@@ -1,7 +1,10 @@
 import type {
   ReviewerHandoff,
   ReviewerLaunchPlan,
+  ReviewerSessionStatus,
+  RunAction,
   RunSnapshot,
+  RunStatus,
 } from '../shared/types.js';
 import { DEFAULT_TEMPLATES, buildRoleResolutions, renderTemplate } from './agents.js';
 import type { GodmodeConfig } from './config.js';
@@ -196,6 +199,59 @@ export type ReviewerCommentInput = {
  * reviewer's actual findings are the reviewer's own PR comments — GodMode never
  * pastes captured agent output here or treats a self-report as verified evidence.
  */
+/**
+ * How a reviewer launch relates to the run state machine for a given status:
+ * the forward action that advances the run when starting fresh, an idempotent
+ * relaunch (no transition) while reviewers are already running, or disallowed.
+ *
+ * Reviewers launch at two points in the lifecycle — after the first PR
+ * (`pr_opened → start_reviewers → reviewers_running`) and after a builder fix
+ * (`fix_pushed → rerun_reviewers → reviewers_rerunning`). Both the initial-launch
+ * statuses and their already-running relaunch statuses are allowed, so a fix
+ * cycle can re-review the new commit rather than advancing to synthesis with
+ * stale reviewer evidence.
+ */
+export type ReviewerLaunchTransition =
+  | { allowed: true; action: Extract<RunAction, 'start_reviewers' | 'rerun_reviewers'>; relaunch: false }
+  | { allowed: true; action: null; relaunch: true }
+  | { allowed: false };
+
+export function reviewerLaunchTransition(status: RunStatus): ReviewerLaunchTransition {
+  switch (status) {
+    case 'pr_opened':
+      return { allowed: true, action: 'start_reviewers', relaunch: false };
+    case 'fix_pushed':
+      return { allowed: true, action: 'rerun_reviewers', relaunch: false };
+    case 'reviewers_running':
+    case 'reviewers_rerunning':
+      return { allowed: true, action: null, relaunch: true };
+    default:
+      return { allowed: false };
+  }
+}
+
+/**
+ * What a reviewer session's exit means for its tracked state:
+ * - `keep_failed`: the session was already `failed` mid-run (e.g. a capture
+ *   failure); record the exit code but never flip it back to a success state.
+ * - `failed`: a non-zero exit — the reviewer command itself failed, so it must be
+ *   surfaced visibly and must NOT auto-post a marker (which the UI reads as the
+ *   confirmed-success state).
+ * - `completed`: a clean (zero) exit — mark completed and auto-post the marker.
+ */
+export type ReviewerExitOutcome =
+  | { kind: 'keep_failed' }
+  | { kind: 'failed'; error: string }
+  | { kind: 'completed' };
+
+export function resolveReviewerExit(status: ReviewerSessionStatus, exitCode: number): ReviewerExitOutcome {
+  if (status === 'failed') return { kind: 'keep_failed' };
+  if (exitCode !== 0) {
+    return { kind: 'failed', error: `Reviewer session exited with code ${exitCode}; no marker comment posted.` };
+  }
+  return { kind: 'completed' };
+}
+
 export function reviewerCommentBody(input: ReviewerCommentInput): string {
   const lines: string[] = [];
   lines.push(`**GodMode · ${input.displayName}** — \`${input.reviewerId}\``);

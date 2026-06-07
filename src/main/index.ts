@@ -33,7 +33,12 @@ import {
   reviewerArtifactPath,
   reviewerArtifactRelPath,
 } from './artifacts.js';
-import { composeReviewerLaunch, reviewerCommentBody } from './reviewer.js';
+import {
+  composeReviewerLaunch,
+  resolveReviewerExit,
+  reviewerCommentBody,
+  reviewerLaunchTransition,
+} from './reviewer.js';
 import type {
   AgentRole,
   HandoffSendResult,
@@ -455,20 +460,24 @@ async function handleReviewerExit(paneId: AgentRole, exitCode: number): Promise<
   const run = getCurrentRun();
   const session = run?.reviewers?.find((reviewer) => reviewer.paneId === paneId);
   if (!session) return;
-  // A capture failure during the session already marked this reviewer `failed`.
-  // Honor that — record the exit code for audit, but do not flip it back to
-  // `completed` or post a marker that references an artifact we failed to write.
-  if (session.status === 'failed') {
+
+  const outcome = resolveReviewerExit(session.status, exitCode);
+  // A capture failure mid-session already marked this reviewer `failed`; record
+  // the exit code for audit but never flip it back to a success state.
+  if (outcome.kind === 'keep_failed') {
     emitRunChanged(updateCurrentRunReviewer(paneId, { exitCode }));
     return;
   }
-  const updated = updateCurrentRunReviewer(paneId, { status: 'completed', exitCode });
-  emitRunChanged(updated);
+  // A non-zero exit is a reviewer command failure: surface it visibly and do NOT
+  // auto-post a marker (which the UI treats as confirmed success).
+  if (outcome.kind === 'failed') {
+    emitRunChanged(updateCurrentRunReviewer(paneId, { status: 'failed', exitCode, error: outcome.error }));
+    return;
+  }
+  // Clean exit: mark completed, then auto-post the role-signed marker comment.
+  emitRunChanged(updateCurrentRunReviewer(paneId, { status: 'completed', exitCode }));
   await postReviewerCommentAndRecord(paneId);
 }
-
-/** Statuses from which reviewers may be launched: a freshly opened PR, or a relaunch. */
-const REVIEWER_START_STATUSES = new Set(['pr_opened', 'reviewers_running']);
 
 /**
  * Launch Reviewer A and B from a verified PR (issue #10). Order of operations:
@@ -478,21 +487,25 @@ const REVIEWER_START_STATUSES = new Set(['pr_opened', 'reviewers_running']);
  * the run-artifact dir, and launch each configured reviewer independently in the
  * operated-project root, capturing stdout/stderr to a local artifact and writing
  * the prompt into the session. Each reviewer's lifecycle is tracked on the run so
- * a launch failure is visible and never silently marked complete. Advancing to
- * `reviewers_running` also records the PR number/branch so the later comment post
- * has its coordinates.
+ * a launch failure is visible and never silently marked complete.
+ *
+ * Reviewers launch both after the first PR (`pr_opened`) and after a builder fix
+ * (`fix_pushed`), plus idempotent relaunch while reviewers are already running in
+ * either cycle. The matching forward action (`start_reviewers` / `rerun_reviewers`)
+ * is resolved by {@link reviewerLaunchTransition} and dispatched once launched,
+ * recording the PR number/branch so the later comment post has its coordinates.
  */
 async function handleStartReviewers(): Promise<StartReviewersResult> {
   const run = getCurrentRun();
   if (!run) {
     return { ok: false, code: 'no_run', error: 'There is no active run to start reviewers for.', run: null };
   }
-  const relaunch = run.status === 'reviewers_running';
-  if (!REVIEWER_START_STATUSES.has(run.status)) {
+  const transition = reviewerLaunchTransition(run.status);
+  if (!transition.allowed) {
     return {
       ok: false,
       code: 'invalid_state',
-      error: `Reviewers start from a PR-opened run (current: ${run.status}).`,
+      error: `Reviewers start from a PR-opened or fix-pushed run (current: ${run.status}).`,
       run,
     };
   }
@@ -622,11 +635,12 @@ async function handleStartReviewers(): Promise<StartReviewersResult> {
     };
   }
 
-  // Advance pr_opened → reviewers_running once, recording the PR number/branch so
-  // the later comment post has its coordinates. A relaunch is already in that
-  // state, so the run keeps its recorded coordinates.
-  if (!relaunch) {
-    const advanced = dispatchRunAction('start_reviewers', {
+  // Advance through the matching forward action once (start_reviewers from
+  // pr_opened, rerun_reviewers from fix_pushed), recording the PR number/branch
+  // so the later comment post has its coordinates. An idempotent relaunch
+  // (reviewers already running) has no transition and keeps its coordinates.
+  if (transition.action) {
+    const advanced = dispatchRunAction(transition.action, {
       reason: `Launched ${launched} reviewer session(s) for PR #${pr.number}.`,
       prNumber: pr.number,
       branch: pr.branch,

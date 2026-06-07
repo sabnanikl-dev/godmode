@@ -85,8 +85,24 @@ id can never escape the run dir. `.godmode/runs/` is gitignored.
 Each reviewer is tracked on `RunSnapshot.reviewers` with an independent status:
 `launching → running → completed → comment_posted`, or `failed`. The state is set
 to `launching` for every reviewer before any spawn, so a launch that fails is
-still visible. Advancing `pr_opened → reviewers_running` also records the PR
-number/branch on the run so the later comment post has its coordinates.
+still visible.
+
+Reviewers launch at **two** points in the run lifecycle, resolved by the pure
+`reviewerLaunchTransition(status)`: the first PR (`pr_opened → start_reviewers →
+reviewers_running`) and after a builder fix (`fix_pushed → rerun_reviewers →
+reviewers_rerunning`), plus an idempotent relaunch while reviewers are already
+running in either cycle. Without the fix-cycle path the operator could not
+re-review a fix commit and the run could reach synthesis with stale reviewer
+evidence. The matching forward action is dispatched once at least one reviewer
+launches, recording the PR number/branch so the later comment post has its
+coordinates; a relaunch has no transition and keeps those coordinates.
+
+When a reviewer session **exits**, `resolveReviewerExit(status, exitCode)` decides
+its fate: a clean (zero) exit marks it `completed` and auto-posts the marker; a
+**non-zero** exit marks it `failed` with a visible reason and posts **nothing** (a
+failed one-shot command must never become the green `comment_posted` state); a
+session already `failed` mid-run (a capture failure) stays failed, recording only
+the exit code.
 
 ## Marker comment (auto + override)
 
@@ -110,13 +126,13 @@ without a manual refresh.
 
 ## Errors and async updates
 
-Every failure mode — launch failure, output-capture failure, a `gh` post failure,
-or a missing PR number — is recorded on the reviewer as `failed` with a visible
-reason and **never** collapsed into `completed`. A reviewer already marked `failed`
-mid-session (a capture failure) keeps that status on exit — the exit handler
-records the exit code but does not flip it to `completed` or post a marker that
-references an artifact it failed to write. So the dashboard never shows a
-silently-finished review. Because
+Every failure mode — launch failure, a **non-zero session exit**, an output-capture
+failure, a `gh` post failure, or a missing PR number — is recorded on the reviewer
+as `failed` with a visible reason and **never** collapsed into `completed`. A
+reviewer already marked `failed` mid-session (a capture failure) keeps that status
+on exit — the exit handler records the exit code but does not flip it to
+`completed` or post a marker that references an artifact it failed to write. So the
+dashboard never shows a silently-finished review. Because
 the session-exit and comment-post updates happen asynchronously after the IPC call
 returns, the main process pushes the latest snapshot over `godmode:run:changed`
 (mirroring `projectChanged`); the renderer treats it as authoritative and the
@@ -125,9 +141,12 @@ GitHub pane refreshes its snapshot on the same signal.
 ## Tests
 
 `test/reviewer.test.js` covers `composeReviewerLaunch` (pointer-first prompt bound
-to PR/reviewer/role-doc with no pasted diff, `missingVariables`, the verified gate)
-and `reviewerCommentBody` (role-signed, artifact-referencing, no merge-readiness
-claim). `test/artifacts.test.js` covers the artifact path/dir/append helpers over a
+to PR/reviewer/role-doc with no pasted diff, `missingVariables`, the verified gate),
+`reviewerCommentBody` (role-signed, artifact-referencing, no merge-readiness claim),
+`reviewerLaunchTransition` (initial + fix-cycle launch/relaunch, disallowed
+statuses), and `resolveReviewerExit` (non-zero exit → failed/no-post, clean exit →
+completed, already-failed kept). `test/artifacts.test.js` covers the artifact
+path/dir/append helpers over a
 temp dir, the captured-write success/failure return, and the reviewer-id
 path-confinement guard. `test/run.test.js` covers the reviewer-session reducers
 (immutability + lifecycle transitions). All are pure — no Electron, no real spawn,

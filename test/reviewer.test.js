@@ -3,7 +3,12 @@
 // against the compiled main output (`npm run build:main` first). Run via `npm test`.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { composeReviewerLaunch, reviewerCommentBody } from '../dist/main/reviewer.js';
+import {
+  composeReviewerLaunch,
+  resolveReviewerExit,
+  reviewerCommentBody,
+  reviewerLaunchTransition,
+} from '../dist/main/reviewer.js';
 import { DEFAULT_CONFIG } from '../dist/main/config.js';
 import { createRun } from '../dist/main/run.js';
 
@@ -136,4 +141,49 @@ test('the marker comment is role-signed, references the artifact, and asserts no
   assert.match(body, /does not assert merge-readiness/i);
   // It is a marker, not the reviewer's verdict.
   assert.match(body, /reviewer’s own .*PR comments/);
+});
+
+// --- Launch transition + exit resolution (Hermes review) --------------------
+
+test('reviewers launch from both the initial PR and a fix-pushed cycle', () => {
+  // Initial PR and its relaunch.
+  assert.deepEqual(reviewerLaunchTransition('pr_opened'), {
+    allowed: true,
+    action: 'start_reviewers',
+    relaunch: false,
+  });
+  assert.deepEqual(reviewerLaunchTransition('reviewers_running'), { allowed: true, action: null, relaunch: true });
+
+  // Fix cycle: after a builder fix is pushed, reviewers must be relaunchable for
+  // the new commit — otherwise the run advances to synthesis with stale evidence.
+  assert.deepEqual(reviewerLaunchTransition('fix_pushed'), {
+    allowed: true,
+    action: 'rerun_reviewers',
+    relaunch: false,
+  });
+  assert.deepEqual(reviewerLaunchTransition('reviewers_rerunning'), {
+    allowed: true,
+    action: null,
+    relaunch: true,
+  });
+
+  // Everything else is disallowed (the main process still re-validates).
+  for (const status of ['idle', 'issue_selected', 'builder_running', 'review_synthesis', 'merge_ready']) {
+    assert.deepEqual(reviewerLaunchTransition(status), { allowed: false }, `expected ${status} disallowed`);
+  }
+});
+
+test('a non-zero reviewer exit becomes failed with no auto marker comment', () => {
+  // Clean exit → completed (the caller then auto-posts the marker).
+  assert.deepEqual(resolveReviewerExit('running', 0), { kind: 'completed' });
+
+  // Non-zero exit → failed, surfaced visibly, never collapsed into success.
+  const failed = resolveReviewerExit('running', 1);
+  assert.equal(failed.kind, 'failed');
+  assert.match(failed.error, /exited with code 1/);
+  assert.match(failed.error, /no marker comment/i);
+
+  // A capture failure already flipped it to failed mid-run — keep it failed.
+  assert.deepEqual(resolveReviewerExit('failed', 0), { kind: 'keep_failed' });
+  assert.deepEqual(resolveReviewerExit('failed', 1), { kind: 'keep_failed' });
 });
