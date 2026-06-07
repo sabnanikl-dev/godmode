@@ -1007,11 +1007,13 @@ export type ReviewerGateState = {
 /**
  * What the review synthesis recommends the run do next:
  * - `merge_ready`: both reviewers cleared and the #9 evidence is verified.
- * - `request_fix`: accepted blockers remain and the cycle budget has room.
+ * - `request_fix`: accepted blockers remain on a VERIFIED PR and the cycle budget
+ *   has room — a fix cycle only ever targets verified PR coordinates.
  * - `needs_human`: ambiguous/contradictory reviewer output, or blockers with no
  *   cycle budget left.
- * - `hold`: no blockers and no ambiguity, but a non-reviewer gate is not yet met
- *   (e.g. the PR is not verified) — the operator refreshes/acts, nothing auto-fires.
+ * - `hold`: a non-reviewer gate is not yet met and nothing can auto-fire — either
+ *   no blockers but the PR is unverified, OR blockers exist but the PR is
+ *   unverified (held until the operator re-verifies, then it becomes request_fix).
  */
 export type MergeRecommendation = 'merge_ready' | 'request_fix' | 'needs_human' | 'hold';
 

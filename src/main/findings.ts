@@ -298,9 +298,10 @@ export type MergeReadinessInput = {
  * Compute the merge-readiness gate (issue #11). Merge-ready requires BOTH
  * reviewers cleared, the verified #9 commit evidence, and no accepted blockers —
  * a reviewer self-report alone is never enough. Recommendation precedence:
- * ambiguous output → `needs_human`; remaining accepted blockers → `request_fix`;
- * all gates satisfied → `merge_ready`; otherwise `hold` (a non-reviewer gate, e.g.
- * an unverified PR, is unmet but there is nothing to auto-fix).
+ * ambiguous output → `needs_human`; remaining accepted blockers on a verified PR →
+ * `request_fix` (blockers but an unverified PR → `hold`, never a fix against a
+ * stale target); all gates satisfied → `merge_ready`; otherwise `hold` (a
+ * non-reviewer gate, e.g. an unverified PR, is unmet but nothing can auto-fix).
  */
 export function computeMergeReadiness(input: MergeReadinessInput): MergeReadiness {
   const { results, verification } = input;
@@ -342,10 +343,19 @@ export function computeMergeReadiness(input: MergeReadinessInput): MergeReadines
 
   let recommendation: MergeRecommendation;
   if (anyAmbiguous) recommendation = 'needs_human';
-  else if (totalAcceptedBlockers > 0) recommendation = 'request_fix';
+  // Accepted blockers only open a fix cycle against a VERIFIED PR. Without the #9
+  // evidence (no PR, needs-refresh, checks-failed, …) the PR coordinates are stale
+  // or unverified, so a fix prompt would target an unverified PR — hold until the
+  // operator re-verifies, then this recomputes to request_fix.
+  else if (totalAcceptedBlockers > 0) recommendation = prVerified ? 'request_fix' : 'hold';
   else if (mergeReady) recommendation = 'merge_ready';
   else recommendation = 'hold';
 
+  if (totalAcceptedBlockers > 0 && !prVerified) {
+    reasons.push(
+      `${totalAcceptedBlockers} accepted blocker(s) need a fix, but the fix cycle is held until the PR is verified again.`,
+    );
+  }
   if (mergeReady) reasons.push('Both reviewers cleared and the PR commit is verified — merge-ready.');
 
   return {

@@ -964,6 +964,19 @@ function handleSendFix(): HandoffSendResult {
   if (run.prNumber === undefined) {
     return { ok: false, code: 'invalid_state', error: 'No PR number is recorded for this run.', run };
   }
+  // Verified-PR gate (defense in depth). The synthesis that opened this cycle only
+  // recommends request_fix against a verified PR, but re-confirm here: the recorded
+  // findings must carry a verified merge gate AND the bound PR URL. Sending a fix
+  // against a stale/unverified PR target would break the verified-coordinates
+  // safety contract — re-verify (#9) and re-synthesize before sending.
+  if (!run.findings?.merge.prVerified || !run.findings.prUrl) {
+    return {
+      ok: false,
+      code: 'invalid_state',
+      error: 'The PR is not verified for this run; re-verify (#9) and re-synthesize before sending a fix.',
+      run,
+    };
+  }
   if (!hasPtySession('builder')) {
     return {
       ok: false,
@@ -975,7 +988,7 @@ function handleSendFix(): HandoffSendResult {
 
   const loaded = loadConfig();
   const config = loaded.status === 'loaded' ? loaded.config : DEFAULT_CONFIG;
-  const pr = { number: run.prNumber, url: run.findings?.prUrl ?? '', branch: run.branch };
+  const pr = { number: run.prNumber, url: run.findings.prUrl, branch: run.branch };
   const handoff = composeFixHandoff(config, run, {
     projectName: loaded.projectName,
     pr,

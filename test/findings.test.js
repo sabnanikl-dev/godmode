@@ -168,6 +168,21 @@ test('accepted blockers recommend a fix cycle', () => {
   assert.equal(merge.reviewerA.acceptedBlockers, 1);
 });
 
+test('accepted blockers hold (never request_fix) when the PR is not verified', () => {
+  // Codex #11 P1: a fix cycle must never target a stale/unverified PR. Blockers
+  // exist, but the #9 gate is unverified → hold until the operator re-verifies.
+  const failText = 'BLOCKING A-1: Bug\nFile: a.ts:1\nDONE: ROLE=reviewer STATUS=fail BLOCKING=1';
+  const results = [parseA(failText), parseB('DONE: ROLE=reviewer STATUS=pass BLOCKING=0')];
+  const unverified = computeMergeReadiness({ results, verification: { status: 'needs_refresh', pr: { number: 42 } } });
+  assert.equal(unverified.recommendation, 'hold');
+  assert.equal(unverified.mergeReady, false);
+  assert.match(unverified.reasons.join(' '), /held until the PR is verified/);
+
+  // Same blockers with no verification at all still holds — never a fix.
+  const noVerif = computeMergeReadiness({ results, verification: null });
+  assert.equal(noVerif.recommendation, 'hold');
+});
+
 test('ambiguous reviewer output forces needs_human even with a verified PR', () => {
   const results = [parseA('total nonsense'), parseB('DONE: ROLE=reviewer STATUS=pass BLOCKING=0')];
   const merge = computeMergeReadiness({ results, verification: verified() });
