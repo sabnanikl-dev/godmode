@@ -171,7 +171,7 @@ function createWindow(): void {
     title: 'GodMode',
     backgroundColor: '#07080d',
     webPreferences: {
-      preload: path.join(__dirname, '../preload/index.js'),
+      preload: path.join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
     },
