@@ -70,7 +70,7 @@ Prefer simple, boring implementation over clever abstractions.
 
 ## CodeGraph Usage
 
-Builder and reviewer agents should use CodeGraph as a read-first repo intelligence layer when it can answer a concrete implementation or review question.
+Builder and reviewer agents Must use CodeGraph as a read-first repo intelligence layer when it can answer a concrete implementation or review question.
 
 CodeGraph is for:
 
