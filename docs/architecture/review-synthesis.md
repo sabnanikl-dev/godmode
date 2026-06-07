@@ -68,10 +68,15 @@ It returns an ordered `reasons[]` explaining any unmet condition and a
 `recommendation`:
 
 - `needs_human` — any ambiguous/contradictory reviewer output;
-- `request_fix` — accepted blockers remain;
+- `request_fix` — accepted blockers remain **and** the #9 commit verification is
+  `verified`. A fix cycle only ever targets verified PR coordinates;
 - `merge_ready` — every gate satisfied;
-- `hold` — no blockers and no ambiguity, but a non-reviewer gate is unmet (e.g.
-  the PR is not verified). The operator refreshes/acts; nothing auto-fires.
+- `hold` — a non-reviewer gate is unmet and nothing can auto-fire: either no
+  blockers and no ambiguity but the PR is unverified, **or** accepted blockers
+  remain while the PR is unverified (`no_pr_for_branch` / `needs_refresh` /
+  `checks_failed` / no verification). In the blockers case the gate holds rather
+  than requesting a fix against a stale target; once the operator re-verifies it
+  recomputes to `request_fix`. Nothing auto-fires.
 
 ## Driving the state machine
 
@@ -101,9 +106,13 @@ is never left unresolved. Like every GodMode handoff it is **pointer-first**: th
 blockers travel as a compact capsule, but the builder is pointed back to the live
 PR diff/threads/reviews and the operated project's canonical docs — not a pasted
 reviewer transcript. The rendered handoff is returned for operator review and sent
-into the builder session via `handleSendFix` (which re-verifies to bind fresh PR
-coordinates). Sending records that the fix prompt was *delivered*, never that the
-fix succeeded.
+into the builder session via `handleSendFix`. It does **no** live `gh` round trip
+— the synthesis that opened this cycle already ran the #9 gate, and the pushed
+commit is re-verified later before reviewers re-review. Instead it re-checks the
+recorded findings as a defense-in-depth gate: it refuses to send unless the stored
+merge gate is `prVerified` and a PR URL is bound, then recomposes the fix prompt
+from those verified coordinates. Sending records that the fix prompt was
+*delivered*, never that the fix succeeded.
 
 After the builder pushes, the operator dispatches `push_fix` (recording the new
 expected commit), then reruns reviewers. The rerun path (`handleStartReviewers`
