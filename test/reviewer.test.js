@@ -7,6 +7,7 @@ import {
   canPostReviewerMarker,
   composeReviewerLaunch,
   isReviewerRunContextStale,
+  isReviewerSessionStale,
   resolveReviewerExit,
   reviewerCommentBody,
   reviewerLaunchTransition,
@@ -213,4 +214,15 @@ test('isReviewerRunContextStale detects a changed run or operated project across
   assert.equal(isReviewerRunContextStale({ runId: 'run-11', root: '/p/alpha' }, captured), true);
   // Operated project switched → stale.
   assert.equal(isReviewerRunContextStale({ runId: 'run-10', root: '/p/beta' }, captured), true);
+});
+
+test('isReviewerSessionStale detects a same-run reviewer relaunch across an await', () => {
+  const capturedToken = 'tok-launch-1';
+  // Same tracked session (token unchanged) → not stale, safe to record the post.
+  assert.equal(isReviewerSessionStale('tok-launch-1', capturedToken), false);
+  // The pane was relaunched in the same run/root → a fresh token → stale, so an
+  // in-flight post can't stamp the new session comment_posted with the old URL.
+  assert.equal(isReviewerSessionStale('tok-launch-2', capturedToken), true);
+  // The session vanished (cleared/replaced with no token) → stale.
+  assert.equal(isReviewerSessionStale(undefined, capturedToken), true);
 });

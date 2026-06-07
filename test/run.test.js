@@ -450,8 +450,8 @@ test('recordCurrentRunVerification records against the live run, null when none'
 // --- Reviewer session lifecycle (issue #10) ---------------------------------
 
 const reviewerDescriptors = [
-  { reviewerId: 'reviewer-a', paneId: 'reviewer_a', displayName: 'Codex A', roleDoc: 'docs/review/a.md', status: 'launching', artifactPath: '.godmode/runs/run-10/reviewer-a.log', promptChars: 200, commentPosted: false },
-  { reviewerId: 'reviewer-b', paneId: 'reviewer_b', displayName: 'Codex B', roleDoc: 'docs/review/b.md', status: 'launching', artifactPath: '.godmode/runs/run-10/reviewer-b.log', promptChars: 210, commentPosted: false },
+  { reviewerId: 'reviewer-a', paneId: 'reviewer_a', sessionToken: 'tok-a', displayName: 'Codex A', roleDoc: 'docs/review/a.md', status: 'launching', artifactPath: '.godmode/runs/run-10/reviewer-a.log', promptChars: 200, commentPosted: false },
+  { reviewerId: 'reviewer-b', paneId: 'reviewer_b', sessionToken: 'tok-b', displayName: 'Codex B', roleDoc: 'docs/review/b.md', status: 'launching', artifactPath: '.godmode/runs/run-10/reviewer-b.log', promptChars: 210, commentPosted: false },
 ];
 
 test('setReviewerSessions stamps reviewers without mutating the input', () => {

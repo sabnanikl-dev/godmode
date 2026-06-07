@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { getAppRepoState } from './appRepo.js';
@@ -37,6 +38,7 @@ import {
   canPostReviewerMarker,
   composeReviewerLaunch,
   isReviewerRunContextStale,
+  isReviewerSessionStale,
   resolveReviewerExit,
   reviewerCommentBody,
   reviewerLaunchTransition,
@@ -444,21 +446,38 @@ async function postReviewerCommentAndRecord(paneId: AgentRole): Promise<Reviewer
     artifactRelPath,
   });
 
-  // Capture the run/root before the live `gh` call so we can confirm they still
-  // match after the await — the operator may switch project, clear the run, or
-  // start another run mid-post.
+  // Capture the run/root AND this reviewer's per-launch session token before the
+  // live `gh` call so we can confirm they still match after the await — the
+  // operator may switch project, clear the run, start another run, or relaunch
+  // reviewers in the same run mid-post.
   const captured = { runId: run.id, root: getSelectedProjectRoot() };
+  const capturedToken = session.sessionToken;
   const result = await postPrComment(captured.root, run.prNumber, body);
 
-  // Stale guard: if the run or operated project changed while the comment posted,
-  // do NOT patch whatever run is now current (a different run shares pane ids) or
-  // push a stale snapshot. The comment did reach GitHub; we just don't mutate the
-  // wrong run.
+  // Stale guard (cross-run/project): if the run or operated project changed while
+  // the comment posted, do NOT patch whatever run is now current (a different run
+  // shares pane ids) or push a stale snapshot. The comment did reach GitHub; we
+  // just don't mutate the wrong run.
   if (isReviewerRunContextStale({ runId: getCurrentRun()?.id ?? null, root: getSelectedProjectRoot() }, captured)) {
     return {
       ok: false,
       code: 'invalid_state',
       error: 'The run or operated project changed while posting the reviewer comment; no run state was changed.',
+      run: getCurrentRun(),
+    };
+  }
+
+  // Stale guard (same-run relaunch): even with the run id and root unchanged, an
+  // idempotent reviewer relaunch replaces the tracked session under this pane. If
+  // that happened during the await, the freshly relaunched session must not be
+  // stamped `comment_posted`/`commentError` from this older post — its token
+  // differs from the one captured above.
+  const currentSession = getCurrentRun()?.reviewers?.find((reviewer) => reviewer.paneId === paneId);
+  if (isReviewerSessionStale(currentSession?.sessionToken, capturedToken)) {
+    return {
+      ok: false,
+      code: 'invalid_state',
+      error: 'The reviewer session was relaunched while posting its comment; no run state was changed.',
       run: getCurrentRun(),
     };
   }
@@ -611,6 +630,9 @@ async function handleStartReviewers(): Promise<StartReviewersResult> {
       plan.reviewers.map((reviewer) => ({
         reviewerId: reviewer.reviewerId,
         paneId: reviewer.paneId,
+        // Fresh per-launch identity: an in-flight post from a prior same-run
+        // launch captured the old token and is refused after this relaunch.
+        sessionToken: randomUUID(),
         displayName: reviewer.displayName,
         roleDoc: reviewer.roleDoc,
         status: 'launching' as const,

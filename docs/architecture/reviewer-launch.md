@@ -43,6 +43,16 @@ is also awaited): the pure `isReviewerRunContextStale(current, captured)` predic
 is shared by both so neither mutates — nor pushes a snapshot for — whatever run is
 current after the await if it has drifted.
 
+The run/root guard alone does not catch a relaunch **within the same run and
+root**: reviewers relaunch idempotently (`reviewers_running` /
+`reviewers_rerunning`), replacing the tracked sessions under the same pane ids. So
+each launch stamps every session with a fresh per-launch `sessionToken`, and the
+comment-post path captures that token before its `gh pr comment` await and
+re-confirms it with `isReviewerSessionStale(currentToken, capturedToken)`
+afterward. An in-flight post from an earlier launch therefore cannot stamp a
+freshly relaunched session `comment_posted`/`commentError` with the previous
+comment — its token no longer matches.
+
 ## Pointer-first prompts
 
 `composeReviewerLaunch` renders the configured `reviewer_start` template per
@@ -163,8 +173,10 @@ to PR/reviewer/role-doc with no pasted diff, `missingVariables`, the verified ga
 `reviewerLaunchTransition` (initial + fix-cycle launch/relaunch, disallowed
 statuses), `resolveReviewerExit` (non-zero exit → failed/no-post, clean exit →
 completed, already-failed kept), `canPostReviewerMarker` (only a ran session is
-postable; failed/launching are not), and `isReviewerRunContextStale` (run cleared,
-different run, or changed root across an await → stale). `test/artifacts.test.js`
+postable; failed/launching are not), `isReviewerRunContextStale` (run cleared,
+different run, or changed root across an await → stale), and
+`isReviewerSessionStale` (a same-run relaunch's fresh `sessionToken` across an
+await → stale). `test/artifacts.test.js`
 covers the artifact
 path/dir/append helpers over a
 temp dir, the captured-write success/failure return, and the reviewer-id

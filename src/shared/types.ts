@@ -776,6 +776,14 @@ export type ReviewerSessionState = {
   reviewerId: string;
   /** PTY pane/role the reviewer runs in. */
   paneId: AgentRole;
+  /**
+   * Opaque per-launch identity, regenerated every time reviewers are launched
+   * (including an idempotent same-run relaunch). An async marker post captures
+   * this before its `gh` call and re-confirms it after; if a relaunch replaced
+   * the session under the same pane/run/root, the token differs and the stale
+   * post is refused — it can never patch the freshly relaunched session.
+   */
+  sessionToken: string;
   /** Resolved reviewer display name (vendor label only; role stays generic). */
   displayName: string;
   /** Project-relative role doc the reviewer was pointed at, when configured. */

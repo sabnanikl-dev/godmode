@@ -279,6 +279,26 @@ export function isReviewerRunContextStale(
   return current.runId !== captured.runId || current.root !== captured.root;
 }
 
+/**
+ * Whether the tracked reviewer session for a pane has been replaced since an
+ * async marker post captured it. {@link isReviewerRunContextStale} only catches a
+ * changed run id or operated-project root, but reviewers relaunch idempotently
+ * *within the same run and root* (`reviewers_running`/`reviewers_rerunning`),
+ * replacing the tracked sessions under the same pane ids. If an old auto/manual
+ * post is in flight when that happens, the run/root guard alone would still let
+ * its result patch the freshly relaunched session (e.g. stamp it `comment_posted`
+ * with the previous comment URL). Comparing the per-launch `sessionToken` — the
+ * value the post captured against the value now tracked for the pane — catches
+ * that same-run case. A missing current token (no session, or one tracked before
+ * tokens existed) counts as stale. Pure so the post-path guard is unit-tested.
+ */
+export function isReviewerSessionStale(
+  currentToken: string | undefined,
+  capturedToken: string,
+): boolean {
+  return currentToken !== capturedToken;
+}
+
 export function resolveReviewerExit(status: ReviewerSessionStatus, exitCode: number): ReviewerExitOutcome {
   if (status === 'failed') return { kind: 'keep_failed' };
   if (exitCode !== 0) {
